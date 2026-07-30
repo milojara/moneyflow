@@ -22,7 +22,7 @@ var CAT_COLORS = {vivienda:'#378ADD',mercado:'#1D9E75',transporte:'#BA7517',salu
 var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
 // Estado en memoria
-var state = {transactions:[],goals:[],accounts:{milo:0,sari:0,cash:0},fixedExpenses:[],fixedChecks:{},entities:[]};
+var state = {transactions:[],goals:[],accounts:{milo:0,sari:0,cash:0},fixedExpenses:[],entities:[]};
 var txnType = 'ingreso';
 var editType = 'ingreso';
 var editingId = null;
@@ -137,12 +137,10 @@ async function migrateToV1() {
     fixedEx.forEach(f => {
       batch.set(wsRef.collection("fixed_expenses").doc(String(f.id)), {
         name: f.name, amount: f.amount, categoryId: f.cat || 'otro', walletId: "milo",
-        state: "pending", createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        dueDay: 28, status: "active",
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
     });
-
-    const fixedChecks = oldData.fixedChecks || {};
-    batch.set(wsRef.collection("temp_legacy").doc("fixed_checks"), { data: fixedChecks });
     
     batch.update(oldDocRef, { migrated_to_v1: true });
     await batch.commit();
@@ -196,13 +194,15 @@ function startListeners() {
       txns.push({
         id: parseInt(doc.id), type: d.type, desc: d.description, amount: d.amount,
         cuenta: d.walletId, destino: d.destinationWalletId, cat: d.categoryId, date: d.date,
-        entityId: d.entityId || null
+        entityId: d.entityId || null,
+        origin: d.origin || null, commitmentId: d.commitmentId || null
       });
     });
     txns.sort((a,b) => b.id - a.id);
     state.transactions = txns;
     renderAll();
     if(document.querySelector('.section.active') && document.querySelector('.section.active').id==='tab-movimientos') renderMovimientos();
+    if(document.querySelector('.section.active') && document.querySelector('.section.active').id==='tab-fijos') renderFijos();
   });
   
   wsRef.collection("goals").onSnapshot(snap => {
@@ -219,30 +219,24 @@ function startListeners() {
     let fijos = [];
     snap.forEach(doc => {
       const d = doc.data();
-      fijos.push({ id: parseInt(doc.id), name: d.name, amount: d.amount, cat: d.categoryId, entityId: d.entityId || null });
+      fijos.push({ 
+        id: parseInt(doc.id), name: d.name, amount: d.amount, cat: d.categoryId, 
+        entityId: d.entityId || null, dueDay: d.dueDay || 28, 
+        walletId: d.walletId || 'milo', status: d.status || 'active' 
+      });
     });
+    fijos.sort((a,b) => a.dueDay - b.dueDay);
     state.fixedExpenses = fijos;
     renderFijos();
   });
-
-  wsRef.collection("temp_legacy").doc("fixed_checks").onSnapshot(snap => {
-    if (snap.exists) {
-      state.fixedChecks = snap.data().data || {};
-      renderFijos();
-    }
-  });
 }
 
-// ── CONFIG Y ENTIDADES (MÓDULO 12) ──
+// ── CONFIG Y ENTIDADES ──
 function openConfigModal() { document.getElementById('config-modal').classList.add('open'); }
 function closeConfigModal() { document.getElementById('config-modal').classList.remove('open'); }
 
-function openEntityListModal() { 
-  document.getElementById('entity-list-modal').classList.add('open'); 
-}
-function closeEntityListModal() { 
-  document.getElementById('entity-list-modal').classList.remove('open'); 
-}
+function openEntityListModal() { document.getElementById('entity-list-modal').classList.add('open'); }
+function closeEntityListModal() { document.getElementById('entity-list-modal').classList.remove('open'); }
 
 function openEntityCrudModal(id, targetSelectId) {
   editingEntityId = id;
@@ -350,7 +344,7 @@ function setType(t) {
   document.getElementById('label-cuenta').textContent=t==='transferencia'?'Cuenta origen':'Cuenta';
 }
 
-// ── ATOMIC BATCH SAVES (V1 ARCHITECTURE) ──
+// ── ATOMIC BATCH SAVES ──
 function saveTransaction() {
   var desc=document.getElementById('f-desc').value.trim();
   var amount=getRawAmount('f-amount');
@@ -540,6 +534,7 @@ function addToGoal(id) {
   .then(() => { toast('✓ Abono registrado'); });
 }
 
+// ── COMPROMISOS (GASTOS FIJOS) ──
 function openFixedModal(id) {
   editingFixedId=id;
   if(id) {
@@ -550,6 +545,8 @@ function openFixedModal(id) {
       document.getElementById('fx-amount-fmt').textContent='$ '+Math.round(fx.amount).toLocaleString('es-CO');
       document.getElementById('fx-cat').value=fx.cat||'otro';
       document.getElementById('fx-entidad').value=fx.entityId||'';
+      document.getElementById('fx-day').value=fx.dueDay||28;
+      document.getElementById('fx-wallet').value=fx.walletId||'milo';
       document.getElementById('fixed-modal-title').textContent='Editar gasto fijo';
       document.getElementById('fixed-modal-btn').textContent='Guardar cambios';
     }
@@ -559,6 +556,8 @@ function openFixedModal(id) {
     document.getElementById('fx-amount-fmt').textContent='';
     document.getElementById('fx-cat').value='vivienda';
     document.getElementById('fx-entidad').value='';
+    document.getElementById('fx-day').value='';
+    document.getElementById('fx-wallet').value='milo';
     document.getElementById('fixed-modal-title').textContent='Nuevo gasto fijo';
     document.getElementById('fixed-modal-btn').textContent='Agregar gasto fijo';
   }
@@ -575,41 +574,65 @@ function saveFixedItem() {
   var amount=getRawAmount('fx-amount');
   var cat=document.getElementById('fx-cat').value;
   var entidad=document.getElementById('fx-entidad').value;
+  var dueDay=parseInt(document.getElementById('fx-day').value) || 28;
+  var wallet=document.getElementById('fx-wallet').value || 'milo';
   if(!name||!amount||amount<=0){alert('Completa nombre y monto');return;}
   
   var fRef;
   if(editingFixedId) {
     fRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(editingFixedId));
-    fRef.update({ name: name, amount: amount, categoryId: cat, entityId: entidad||null, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }).then(() => {
+    fRef.update({ 
+      name: name, amount: amount, categoryId: cat, entityId: entidad||null, 
+      dueDay: dueDay, walletId: wallet, updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
+    }).then(() => {
       closeFixedModal(); toast('✓ Gasto actualizado');
     });
   } else {
     fRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(Date.now()));
-    fRef.set({ name: name, amount: amount, categoryId: cat, entityId: entidad||null, walletId: "milo", state: "pending", createdAt: firebase.firestore.FieldValue.serverTimestamp() }).then(() => {
+    fRef.set({ 
+      name: name, amount: amount, categoryId: cat, entityId: entidad||null, 
+      dueDay: dueDay, walletId: wallet, status: "active", 
+      createdAt: firebase.firestore.FieldValue.serverTimestamp() 
+    }).then(() => {
       closeFixedModal(); toast('✓ Gasto fijo agregado');
     });
   }
 }
 
 function deleteFixedItem(id) {
-  if(!confirm('¿Eliminar este gasto fijo?')) return;
-  db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(id)).delete();
+  if(!confirm('¿Archivar este gasto fijo? Dejará de aparecer en tus compromisos mensuales.')) return;
+  db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(id)).update({ status: 'archived', updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+}
+
+function payFixedExpense(id) {
+  var fx = state.fixedExpenses.find(x => x.id === id);
+  if(!fx) return;
+  if(!confirm('¿Pagar ' + fx.name + ' desde ' + (ACC_LABELS[fx.walletId] || fx.walletId) + '?')) return;
   
-  var key=todayStr().slice(0,7)+'-'+id;
-  var checksRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("temp_legacy").doc("fixed_checks");
-  checksRef.update({ [`data.${key}`]: firebase.firestore.FieldValue.delete() });
-}
-
-function toggleFixedCheck(id) {
-  var key=todayStr().slice(0,7)+'-'+id;
-  var checksRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("temp_legacy").doc("fixed_checks");
-  var isC = isChecked(id);
-  checksRef.set({ data: { [key]: !isC } }, { merge: true });
-}
-
-function isChecked(id) {
-  var key=todayStr().slice(0,7)+'-'+id;
-  return !!state.fixedChecks[key];
+  var txnId = String(Date.now());
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  // Create Transaction
+  var tRef = wsRef.collection("transactions").doc(txnId);
+  batch.set(tRef, {
+      type: 'egreso', amount: fx.amount, description: fx.name, date: todayStr(),
+      walletId: fx.walletId || 'milo', destinationWalletId: null,
+      categoryId: fx.cat, entityId: fx.entityId || null,
+      status: "completed", origin: "fixedExpense", commitmentId: String(id),
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
+  });
+  
+  // Update Wallet
+  var wRef = wsRef.collection("wallets").doc(fx.walletId || 'milo');
+  batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-fx.amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  
+  syncStatus('saving');
+  batch.commit().then(() => {
+    syncStatus('ok'); toast('✓ Gasto pagado exitosamente');
+  }).catch(err => {
+    syncStatus('err'); toast('⚠️ '+err.message);
+  });
 }
 
 // ── RENDER COMPATIBILITY ──
@@ -688,11 +711,31 @@ function renderFijos() {
   var fijos=state.fixedExpenses||[];
   var month=getThisMonth();
   var ing=month.filter(function(t){return t.type==='ingreso';}).reduce(function(a,t){return a+t.amount;},0);
-  var totalFijos=fijos.reduce(function(a,f){return a+f.amount;},0);
-  var totalPagado=fijos.filter(function(f){return isChecked(f.id);}).reduce(function(a,f){return a+f.amount;},0);
-  var totalPendiente=totalFijos-totalPagado;
-  var coverage=totalFijos>0?Math.min(Math.round(ing/totalFijos*100),200):100;
-  var coverageColor=ing>=totalFijos?'var(--green)':ing>=totalFijos*0.7?'var(--gold)':'var(--red)';
+  
+  var totalFijos=0;
+  var totalPagado=0;
+  var now = new Date();
+  var todayDay = now.getDate();
+
+  var enriched = fijos.map(f => {
+    var paidTxn = month.find(t => t.origin === 'fixedExpense' && String(t.commitmentId) === String(f.id));
+    var isPaid = !!paidTxn;
+    var day = parseInt(f.dueDay) || 28;
+    var stateStr = 'pending';
+    if (f.status === 'archived') stateStr = 'archived';
+    else if (isPaid) stateStr = 'paid';
+    else if (todayDay > day) stateStr = 'overdue';
+    else if (day - todayDay <= 5) stateStr = 'upcoming';
+
+    if(f.status !== 'archived') totalFijos += f.amount;
+    if(isPaid) totalPagado += f.amount;
+
+    return { id: f.id, name: f.name, amount: f.amount, cat: f.cat, entityId: f.entityId, isPaid: isPaid, stateStr: stateStr, day: day, status: f.status };
+  });
+
+  var totalPendiente = totalFijos - totalPagado;
+  var coverage = totalFijos>0 ? Math.min(Math.round(ing/totalFijos*100),200) : 100;
+  var coverageColor = ing>=totalFijos?'var(--green)':ing>=totalFijos*0.7?'var(--gold)':'var(--red)';
 
   var sumEl=document.getElementById('fijos-summary');
   sumEl.innerHTML='<div class="summary-row"><span>Total gastos fijos</span><span>'+fmt(totalFijos)+'</span></div>'+
@@ -704,20 +747,26 @@ function renderFijos() {
     (ing<totalFijos?'<div style="font-size:12px;color:var(--red);margin-top:4px">⚠️ Faltan '+fmt(totalFijos-ing)+' para cubrir todos los gastos fijos</div>':'<div style="font-size:12px;color:var(--green);margin-top:4px">✓ Los ingresos cubren todos los gastos fijos</div>');
 
   var listEl=document.getElementById('fijos-list');
-  if(!fijos.length){listEl.innerHTML='<div class="empty" style="padding:20px 0">Agrega tus gastos fijos mensuales</div>';return;}
-  listEl.innerHTML=fijos.map(function(f){
-    var checked=isChecked(f.id);
+  var activeEnriched = enriched.filter(f => f.status !== 'archived' || f.isPaid); // Mostrar archivados solo si se pagaron este mes antes de archivar
+  if(!activeEnriched.length){listEl.innerHTML='<div class="empty" style="padding:20px 0">Agrega tus gastos fijos mensuales</div>';return;}
+  
+  listEl.innerHTML=activeEnriched.map(function(f){
     var entObj = f.entityId ? state.entities.find(e => e.id === f.entityId) : null;
     var entStr = entObj ? entObj.name + ' · ' : '';
+    
+    var stateLabel = f.stateStr === 'paid' ? 'Pagado' : f.stateStr === 'overdue' ? 'Vencido' : f.stateStr === 'upcoming' ? 'Próximo' : f.stateStr === 'pending' ? 'Pendiente' : 'Archivado';
+    var badgeHtml = '<div class="badge-status badge-'+f.stateStr+'">'+stateLabel+'</div>';
+    
+    var payBtn = (!f.isPaid && f.status !== 'archived') ? '<button class="btn-outline" style="font-size:11px;padding:5px 10px;border-radius:6px;margin-right:6px" onclick="payFixedExpense('+f.id+')">Pagar</button>' : '';
+
     return '<div class="fixed-item">'+
-      '<div class="fixed-check'+(checked?' checked':'')+'" onclick="toggleFixedCheck('+f.id+')">'+
-        '<svg viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12"/></svg>'+
-      '</div>'+
-      '<div class="fixed-info">'+
-        '<div class="fixed-name'+(checked?' paid':'')+'">'+f.name+'</div>'+
+      '<div class="fixed-info" style="padding-left:4px">'+
+        badgeHtml +
+        '<div class="fixed-name'+(f.isPaid?' paid':'')+'" style="margin-top:3px">'+f.name+' <span style="font-size:11px;font-weight:400;color:var(--text3)">(Día '+f.day+')</span></div>'+
         '<div class="fixed-amount">'+entStr+(CAT_LABELS[f.cat]||f.cat)+' · '+fmt(f.amount)+'</div>'+
       '</div>'+
       '<div class="fixed-actions">'+
+        payBtn +
         '<button class="icon-btn edit" onclick="openFixedModal('+f.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'+
         '<button class="icon-btn del" onclick="deleteFixedItem('+f.id+')" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button>'+
       '</div>'+

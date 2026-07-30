@@ -146,6 +146,16 @@
       </div>
       <div class="amount-formatted" id="fx-amount-fmt"></div>
     </div>
+    <div style="display:flex;gap:12px">
+      <div class="form-group" style="flex:1">
+        <label>Día de pago</label>
+        <input type="number" id="fx-day" min="1" max="31" placeholder="ej. 15">
+      </div>
+      <div class="form-group" style="flex:1">
+        <label>Pagar desde</label>
+        <select id="fx-wallet"><option value="milo">Milo</option><option value="sari">Sari</option><option value="cash">Caja</option></select>
+      </div>
+    </div>
     <div class="form-group">
       <label>Entidad</label>
       <select id="fx-entidad" onchange="handleEntityChange(this)"><option value="">Sin entidad</option><option value="NEW">+ Nueva entidad...</option></select>
