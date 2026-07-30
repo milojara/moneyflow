@@ -21,13 +21,16 @@ var CAT_LABELS = {vivienda:'Vivienda',mercado:'Mercado',transporte:'Transporte',
 var CAT_COLORS = {vivienda:'#378ADD',mercado:'#1D9E75',transporte:'#BA7517',salud:'#D4537E',educacion:'#534AB7',entretenimiento:'#D85A30',ropa:'#993C1D',servicios:'#639922',tecnologia:'#185FA5',negocio:'#3B6D11',ahorro:'#0F6E56',tc:'#8B3A62',otro:'#888780'};
 var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
-// Estado en memoria (Para retrocompatibilidad UI en Fase 1)
-var state = {transactions:[],goals:[],accounts:{milo:0,sari:0,cash:0},fixedExpenses:[],fixedChecks:{}};
+// Estado en memoria
+var state = {transactions:[],goals:[],accounts:{milo:0,sari:0,cash:0},fixedExpenses:[],fixedChecks:{},entities:[]};
 var txnType = 'ingreso';
 var editType = 'ingreso';
 var editingId = null;
 var editingFixedId = null;
 var isSaving = false;
+
+var pendingSelectId = null;
+var editingEntityId = null;
 
 // ── AMOUNT FORMATTING ──
 function formatAmountInput(input, fmtId) {
@@ -80,38 +83,30 @@ function toast(msg) {
 
 function fmt(n) { return '$'+Math.round(n||0).toLocaleString('es-CO'); }
 
-// ── MIGRACIÓN A V1 (MULTI-TENANT & BILLETERAS) ──
+// ── MIGRACIÓN A V1 ──
 async function migrateToV1() {
   const oldDocRef = db.collection("familia").doc("estado");
   const oldSnap = await oldDocRef.get();
-  
-  if (!oldSnap.exists) return true; // Si no existe el doc viejo, no hay nada que migrar
-  
+  if (!oldSnap.exists) return true;
   const oldData = oldSnap.data();
-  if (oldData.migrated_to_v1) return true; // Ya fue migrado
+  if (oldData.migrated_to_v1) return true;
   
   console.log("Iniciando migración a V1...");
   syncStatus('saving');
   document.getElementById('loading-msg').textContent = "Actualizando arquitectura...";
   
   try {
-    // 1. Backup Inmutable
     const backupRef = db.collection("backups_migracion").doc("estado_backup_" + Date.now());
     await backupRef.set(oldData);
     
-    // 2. Batch de migración
     const batch = db.batch();
     const wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
     
     batch.set(wsRef, {
-      name: "Finanzas Familia",
-      ownerId: DEV_USER_ID,
-      members: [DEV_USER_ID],
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      name: "Finanzas Familia", ownerId: DEV_USER_ID, members: [DEV_USER_ID],
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
     
-    // Migrar Cuentas -> Billeteras
     const accounts = oldData.accounts || {milo:0, sari:0, cash:0};
     const wallets = [
       { id: "milo", name: "Cuenta Milo", type: "banco", balance: accounts.milo||0, currency: "COP", status: "active", ownershipType: "personal", visibility: "owner", ownerId: "Camilo" },
@@ -122,7 +117,6 @@ async function migrateToV1() {
       batch.set(wsRef.collection("wallets").doc(w.id), { ...w, createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: DEV_USER_ID });
     });
     
-    // Migrar Transacciones
     const txns = oldData.transactions || [];
     txns.forEach(t => {
       batch.set(wsRef.collection("transactions").doc(String(t.id)), {
@@ -132,7 +126,6 @@ async function migrateToV1() {
       });
     });
     
-    // Migrar Metas
     const goals = oldData.goals || [];
     goals.forEach(g => {
       batch.set(wsRef.collection("goals").doc(String(g.id)), {
@@ -140,7 +133,6 @@ async function migrateToV1() {
       });
     });
     
-    // Migrar Gastos Fijos
     const fixedEx = oldData.fixedExpenses || [];
     fixedEx.forEach(f => {
       batch.set(wsRef.collection("fixed_expenses").doc(String(f.id)), {
@@ -149,15 +141,11 @@ async function migrateToV1() {
       });
     });
 
-    // Migrar Fixed Checks (Temporal Fase 1)
     const fixedChecks = oldData.fixedChecks || {};
     batch.set(wsRef.collection("temp_legacy").doc("fixed_checks"), { data: fixedChecks });
     
-    // Marcar como migrado
     batch.update(oldDocRef, { migrated_to_v1: true });
-    
     await batch.commit();
-    console.log("Migración completada con éxito.");
     return true;
   } catch (error) {
     console.error("Error en migración:", error);
@@ -174,7 +162,6 @@ async function init() {
   if (fml) fml.textContent = MONTHS[new Date().getMonth()]+' '+new Date().getFullYear();
   setDate();
 
-  // Fase 1: Auth Bypass (Iniciamos flujo de Workspace automáticamente)
   const migrationSuccess = await migrateToV1();
   if (migrationSuccess) {
     document.getElementById('loading').classList.add('hidden');
@@ -186,23 +173,30 @@ async function init() {
 function startListeners() {
   const wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
   
-  // Escuchar Billeteras
+  wsRef.collection("entities").onSnapshot(snap => {
+    let ents = [];
+    snap.forEach(doc => { ents.push({ id: doc.id, ...doc.data() }); });
+    ents.sort((a,b) => a.name.localeCompare(b.name));
+    state.entities = ents;
+    renderEntitiesList();
+    updateEntitySelects();
+    renderAll();
+  });
+
   wsRef.collection("wallets").onSnapshot(snap => {
-    state.accounts = {milo:0, sari:0, cash:0}; // Reset para UI legacy
-    snap.forEach(doc => {
-      state.accounts[doc.id] = doc.data().balance;
-    });
+    state.accounts = {milo:0, sari:0, cash:0};
+    snap.forEach(doc => { state.accounts[doc.id] = doc.data().balance; });
     renderAll();
   });
   
-  // Escuchar Transacciones
   wsRef.collection("transactions").orderBy("date", "desc").onSnapshot(snap => {
     let txns = [];
     snap.forEach(doc => {
       const d = doc.data();
       txns.push({
         id: parseInt(doc.id), type: d.type, desc: d.description, amount: d.amount,
-        cuenta: d.walletId, destino: d.destinationWalletId, cat: d.categoryId, date: d.date
+        cuenta: d.walletId, destino: d.destinationWalletId, cat: d.categoryId, date: d.date,
+        entityId: d.entityId || null
       });
     });
     txns.sort((a,b) => b.id - a.id);
@@ -211,7 +205,6 @@ function startListeners() {
     if(document.querySelector('.section.active') && document.querySelector('.section.active').id==='tab-movimientos') renderMovimientos();
   });
   
-  // Escuchar Metas
   wsRef.collection("goals").onSnapshot(snap => {
     let goals = [];
     snap.forEach(doc => {
@@ -222,23 +215,116 @@ function startListeners() {
     renderGoals();
   });
   
-  // Escuchar Gastos Fijos
   wsRef.collection("fixed_expenses").onSnapshot(snap => {
     let fijos = [];
     snap.forEach(doc => {
       const d = doc.data();
-      fijos.push({ id: parseInt(doc.id), name: d.name, amount: d.amount, cat: d.categoryId });
+      fijos.push({ id: parseInt(doc.id), name: d.name, amount: d.amount, cat: d.categoryId, entityId: d.entityId || null });
     });
     state.fixedExpenses = fijos;
     renderFijos();
   });
 
-  // Escuchar Legacy Fixed Checks (temporal)
   wsRef.collection("temp_legacy").doc("fixed_checks").onSnapshot(snap => {
     if (snap.exists) {
       state.fixedChecks = snap.data().data || {};
       renderFijos();
     }
+  });
+}
+
+// ── CONFIG Y ENTIDADES (MÓDULO 12) ──
+function openConfigModal() { document.getElementById('config-modal').classList.add('open'); }
+function closeConfigModal() { document.getElementById('config-modal').classList.remove('open'); }
+
+function openEntityListModal() { 
+  document.getElementById('entity-list-modal').classList.add('open'); 
+}
+function closeEntityListModal() { 
+  document.getElementById('entity-list-modal').classList.remove('open'); 
+}
+
+function openEntityCrudModal(id, targetSelectId) {
+  editingEntityId = id;
+  pendingSelectId = targetSelectId || null;
+  if(id) {
+    var e = state.entities.find(x => x.id === id);
+    if(e) {
+      document.getElementById('ent-name').value = e.name;
+      document.getElementById('ent-type').value = e.type;
+      document.getElementById('entity-crud-title').textContent = 'Editar Entidad';
+    }
+  } else {
+    document.getElementById('ent-name').value = '';
+    document.getElementById('ent-type').value = 'persona';
+    document.getElementById('entity-crud-title').textContent = 'Nueva Entidad';
+  }
+  document.getElementById('entity-crud-modal').classList.add('open');
+}
+
+function closeEntityCrudModal() { 
+  document.getElementById('entity-crud-modal').classList.remove('open'); 
+  pendingSelectId = null;
+}
+
+function handleEntityChange(sel) {
+  if (sel.value === 'NEW') {
+    sel.value = ''; 
+    openEntityCrudModal(null, sel.id);
+  }
+}
+
+function updateEntitySelects() {
+  var html = '<option value="">Sin entidad</option><option value="NEW">+ Nueva entidad...</option>';
+  state.entities.forEach(e => { html += '<option value="'+e.id+'">'+e.name+'</option>'; });
+  ['f-entidad', 'e-entidad', 'fx-entidad'].forEach(id => {
+    var sel = document.getElementById(id);
+    if(sel) {
+      var val = sel.value;
+      sel.innerHTML = html;
+      if(val && val !== 'NEW') sel.value = val;
+    }
+  });
+}
+
+function renderEntitiesList() {
+  var el = document.getElementById('entities-list');
+  if(!el) return;
+  if(!state.entities.length) { el.innerHTML = '<div class="empty">No hay entidades creadas</div>'; return; }
+  el.innerHTML = state.entities.map(e => {
+    return '<div class="fixed-item">'+
+      '<div class="fixed-info"><div class="fixed-name">'+e.name+'</div><div class="fixed-amount" style="text-transform:capitalize">'+e.type+'</div></div>'+
+      '<div class="fixed-actions"><button class="icon-btn edit" onclick="openEntityCrudModal(\''+e.id+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button></div>'+
+    '</div>';
+  }).join('');
+}
+
+function saveEntity() {
+  var name = document.getElementById('ent-name').value.trim();
+  var type = document.getElementById('ent-type').value;
+  if(!name) { alert('Ingresa un nombre'); return; }
+  
+  var entId = editingEntityId || String(Date.now());
+  var eRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("entities").doc(entId);
+  var data = { name: name, type: type, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: DEV_USER_ID };
+  if(!editingEntityId) {
+    data.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+    data.createdBy = DEV_USER_ID;
+  }
+  
+  syncStatus('saving');
+  eRef.set(data, {merge:true}).then(() => {
+    syncStatus('ok'); toast('✓ Entidad guardada');
+    closeEntityCrudModal();
+    if(pendingSelectId) {
+      var selId = pendingSelectId;
+      setTimeout(() => {
+        var sel = document.getElementById(selId);
+        if(sel) sel.value = entId;
+      }, 300); // Dar tiempo al onSnapshot
+    }
+  }).catch(err => {
+    syncStatus('err'); toast('⚠️ '+err.message);
   });
 }
 
@@ -272,22 +358,23 @@ function saveTransaction() {
   var cat=document.getElementById('f-cat').value;
   var date=document.getElementById('f-date').value;
   var destino=document.getElementById('f-destino').value;
+  var entidad=document.getElementById('f-entidad').value;
   if(!desc||!amount||amount<=0){alert('Completa descripción y monto');return;}
   
   var txnId = String(Date.now());
   var batch = db.batch();
   var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
   
-  // Create Transaction
   var tRef = wsRef.collection("transactions").doc(txnId);
   batch.set(tRef, {
       type: txnType, amount: amount, description: desc, date: date,
       walletId: cuenta, destinationWalletId: txnType === 'transferencia' ? destino : null,
-      categoryId: txnType === 'transferencia' ? null : cat, status: "completed", origin: "manual",
+      categoryId: txnType === 'transferencia' ? null : cat, 
+      entityId: entidad || null,
+      status: "completed", origin: "manual",
       createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
   });
   
-  // Update Wallet(s)
   var wRef = wsRef.collection("wallets").doc(cuenta);
   if (txnType === 'ingreso') {
     batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
@@ -303,7 +390,7 @@ function saveTransaction() {
   batch.commit().then(() => {
     isSaving = false; syncStatus('ok'); toast('✓ Guardado y sincronizado');
     document.getElementById('f-desc').value=''; document.getElementById('f-amount').value='';
-    document.getElementById('f-amount-fmt').textContent=''; setDate();
+    document.getElementById('f-amount-fmt').textContent=''; document.getElementById('f-entidad').value=''; setDate();
   }).catch(err => {
     isSaving = false; syncStatus('err'); toast('⚠️ '+err.message);
   });
@@ -320,6 +407,7 @@ function openEditModal(id) {
   document.getElementById('e-cuenta').value=t.cuenta;
   if(t.destino) document.getElementById('e-destino').value=t.destino;
   document.getElementById('e-cat').value=t.cat||'otro';
+  document.getElementById('e-entidad').value=t.entityId||'';
   document.getElementById('e-date').value=t.date;
   document.getElementById('edit-modal').classList.add('open');
 }
@@ -344,6 +432,7 @@ function saveEdit() {
   if(!old) return;
   
   var amount=getRawAmount('e-amount');
+  var entidad=document.getElementById('e-entidad').value;
   if(!amount||amount<=0){alert('Ingresa un monto válido');return;}
   
   var batch = db.batch();
@@ -379,6 +468,7 @@ function saveEdit() {
     date: document.getElementById('e-date').value, walletId: newCuenta,
     destinationWalletId: editType === 'transferencia' ? newDestino : null,
     categoryId: editType === 'transferencia' ? null : document.getElementById('e-cat').value,
+    entityId: entidad || null,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: DEV_USER_ID
   });
 
@@ -399,7 +489,6 @@ function deleteFromModal() {
   var batch = db.batch();
   var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
   
-  // 1. REVERSE
   var oldWRef = wsRef.collection("wallets").doc(old.cuenta);
   if (old.type === 'ingreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
   else if (old.type === 'egreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
@@ -409,7 +498,6 @@ function deleteFromModal() {
     batch.update(oldDestRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
   }
 
-  // 2. DELETE
   var tRef = wsRef.collection("transactions").doc(String(editingId));
   batch.delete(tRef);
 
@@ -461,6 +549,7 @@ function openFixedModal(id) {
       document.getElementById('fx-amount').value=String(Math.round(fx.amount));
       document.getElementById('fx-amount-fmt').textContent='$ '+Math.round(fx.amount).toLocaleString('es-CO');
       document.getElementById('fx-cat').value=fx.cat||'otro';
+      document.getElementById('fx-entidad').value=fx.entityId||'';
       document.getElementById('fixed-modal-title').textContent='Editar gasto fijo';
       document.getElementById('fixed-modal-btn').textContent='Guardar cambios';
     }
@@ -469,6 +558,7 @@ function openFixedModal(id) {
     document.getElementById('fx-amount').value='';
     document.getElementById('fx-amount-fmt').textContent='';
     document.getElementById('fx-cat').value='vivienda';
+    document.getElementById('fx-entidad').value='';
     document.getElementById('fixed-modal-title').textContent='Nuevo gasto fijo';
     document.getElementById('fixed-modal-btn').textContent='Agregar gasto fijo';
   }
@@ -484,17 +574,18 @@ function saveFixedItem() {
   var name=document.getElementById('fx-name').value.trim();
   var amount=getRawAmount('fx-amount');
   var cat=document.getElementById('fx-cat').value;
+  var entidad=document.getElementById('fx-entidad').value;
   if(!name||!amount||amount<=0){alert('Completa nombre y monto');return;}
   
   var fRef;
   if(editingFixedId) {
     fRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(editingFixedId));
-    fRef.update({ name: name, amount: amount, categoryId: cat, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }).then(() => {
+    fRef.update({ name: name, amount: amount, categoryId: cat, entityId: entidad||null, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }).then(() => {
       closeFixedModal(); toast('✓ Gasto actualizado');
     });
   } else {
     fRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(Date.now()));
-    fRef.set({ name: name, amount: amount, categoryId: cat, walletId: "milo", state: "pending", createdAt: firebase.firestore.FieldValue.serverTimestamp() }).then(() => {
+    fRef.set({ name: name, amount: amount, categoryId: cat, entityId: entidad||null, walletId: "milo", state: "pending", createdAt: firebase.firestore.FieldValue.serverTimestamp() }).then(() => {
       closeFixedModal(); toast('✓ Gasto fijo agregado');
     });
   }
@@ -504,7 +595,6 @@ function deleteFixedItem(id) {
   if(!confirm('¿Eliminar este gasto fijo?')) return;
   db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(id)).delete();
   
-  // Clean checks
   var key=todayStr().slice(0,7)+'-'+id;
   var checksRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("temp_legacy").doc("fixed_checks");
   checksRef.update({ [`data.${key}`]: firebase.firestore.FieldValue.delete() });
@@ -522,7 +612,7 @@ function isChecked(id) {
   return !!state.fixedChecks[key];
 }
 
-// ── RENDER COMPATIBILITY (NO CHANGES TO LOGIC) ──
+// ── RENDER COMPATIBILITY ──
 function getThisMonth() {
   var now=new Date();
   return state.transactions.filter(function(t){
@@ -537,7 +627,12 @@ function txnHTML(t,showEdit) {
   var icon=isIng?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14"/><path d="M5 12l7 7 7-7"/></svg>':isTr?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 16l-4-4 4-4"/><path d="M17 8l4 4-4 4"/><line x1="3" y1="12" x2="21" y2="12"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
   var accB='<span class="badge badge-'+t.cuenta+'">'+(ACC_LABELS[t.cuenta]||t.cuenta)+'</span>';
   var dstB=isTr&&t.destino?' → <span class="badge badge-'+t.destino+'">'+(ACC_LABELS[t.destino]||t.destino)+'</span>':'';
-  var catL=!isTr&&t.cat?' · '+(CAT_LABELS[t.cat]||t.cat):'';
+  
+  var entObj = t.entityId ? state.entities.find(e => e.id === t.entityId) : null;
+  var entName = entObj ? entObj.name : '';
+  var catL = !isTr && t.cat ? ' · '+(CAT_LABELS[t.cat]||t.cat) : '';
+  if (entName && !isTr) catL = ' · ' + entName + catL;
+
   var editBtn=showEdit?'<button class="icon-btn edit" onclick="openEditModal('+t.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>':'';
   return '<div class="txn"><div class="txn-icon '+cls+'">'+icon+'</div><div class="txn-info"><div class="txn-desc">'+t.desc+'</div><div class="txn-sub">'+t.date+' '+accB+dstB+catL+'</div></div><div class="txn-amount '+cls+'">'+(isIng?'+':isTr?'↔':'-')+fmt(t.amount)+'</div><div class="txn-actions">'+editBtn+'</div></div>';
 }
@@ -612,13 +707,15 @@ function renderFijos() {
   if(!fijos.length){listEl.innerHTML='<div class="empty" style="padding:20px 0">Agrega tus gastos fijos mensuales</div>';return;}
   listEl.innerHTML=fijos.map(function(f){
     var checked=isChecked(f.id);
+    var entObj = f.entityId ? state.entities.find(e => e.id === f.entityId) : null;
+    var entStr = entObj ? entObj.name + ' · ' : '';
     return '<div class="fixed-item">'+
       '<div class="fixed-check'+(checked?' checked':'')+'" onclick="toggleFixedCheck('+f.id+')">'+
         '<svg viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12"/></svg>'+
       '</div>'+
       '<div class="fixed-info">'+
         '<div class="fixed-name'+(checked?' paid':'')+'">'+f.name+'</div>'+
-        '<div class="fixed-amount">'+(CAT_LABELS[f.cat]||f.cat)+' · '+fmt(f.amount)+'</div>'+
+        '<div class="fixed-amount">'+entStr+(CAT_LABELS[f.cat]||f.cat)+' · '+fmt(f.amount)+'</div>'+
       '</div>'+
       '<div class="fixed-actions">'+
         '<button class="icon-btn edit" onclick="openFixedModal('+f.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'+

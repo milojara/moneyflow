@@ -18,6 +18,62 @@
   <div style="font-size:13px;color:var(--text3)" id="loading-msg">Conectando...</div>
 </div>
 
+<!-- CONFIG MODAL -->
+<div class="modal-overlay" id="config-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Configuración</div>
+      <button class="modal-close" onclick="closeConfigModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="section-title">Catálogos</div>
+    <div class="card" style="padding:0">
+      <div class="fixed-item" style="padding:14px;cursor:pointer" onclick="openEntityListModal()">
+        <div class="fixed-info">
+          <div class="fixed-name">Entidades Financieras</div>
+          <div class="fixed-amount" style="font-family:'DM Sans',sans-serif;font-size:11px">Personas, bancos, empresas...</div>
+        </div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16" style="color:var(--text3);stroke-width:2"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ENTITY LIST MODAL -->
+<div class="modal-overlay" id="entity-list-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Entidades</div>
+      <button class="modal-close" onclick="closeEntityListModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <button class="btn-outline" style="width:100%;margin-bottom:14px" onclick="openEntityCrudModal(null)">+ Nueva Entidad</button>
+    <div class="card" style="padding:0 14px"><div id="entities-list"></div></div>
+  </div>
+</div>
+
+<!-- ENTITY CRUD MODAL -->
+<div class="modal-overlay" id="entity-crud-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="entity-crud-title">Nueva Entidad</div>
+      <button class="modal-close" onclick="closeEntityCrudModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="form-group"><label>Nombre</label><input type="text" id="ent-name" placeholder="ej. Bancolombia, EPM, Aleja"></div>
+    <div class="form-group">
+      <label>Tipo</label>
+      <select id="ent-type">
+        <option value="persona">Persona / Familiar</option>
+        <option value="banco">Banco / Tarjeta</option>
+        <option value="empresa">Empresa / Servicio</option>
+        <option value="comercio">Comercio / Tienda</option>
+        <option value="mascota">Mascota</option>
+        <option value="otro">Otro</option>
+      </select>
+    </div>
+    <button class="btn-save" id="entity-crud-btn" onclick="saveEntity()">Guardar Entidad</button>
+  </div>
+</div>
+
+
 <!-- EDIT MODAL -->
 <div class="modal-overlay" id="edit-modal">
   <div class="modal">
@@ -46,6 +102,10 @@
     <div class="form-group" id="erow-destino" style="display:none">
       <label>Cuenta destino</label>
       <select id="e-destino"><option value="sari">Cuenta Sari</option><option value="milo">Cuenta Milo</option><option value="cash">Caja fuerte</option></select>
+    </div>
+    <div class="form-group" id="erow-entidad">
+      <label>Entidad (Opcional)</label>
+      <select id="e-entidad" onchange="handleEntityChange(this)"><option value="">Sin entidad</option><option value="NEW">+ Nueva entidad...</option></select>
     </div>
     <div class="form-group" id="erow-cat">
       <label>Categoría</label>
@@ -87,6 +147,10 @@
       <div class="amount-formatted" id="fx-amount-fmt"></div>
     </div>
     <div class="form-group">
+      <label>Entidad</label>
+      <select id="fx-entidad" onchange="handleEntityChange(this)"><option value="">Sin entidad</option><option value="NEW">+ Nueva entidad...</option></select>
+    </div>
+    <div class="form-group">
       <label>Categoría</label>
       <select id="fx-cat">
         <option value="vivienda">🏠 Vivienda / Arriendo</option>
@@ -107,6 +171,10 @@
 <div class="app-header">
   <div class="header-top">
     <div class="app-name">Finanzas Familia <span>Milo & Sari</span></div>
+    <div style="flex:1"></div>
+    <button class="icon-btn" onclick="openConfigModal()" style="margin-right:12px;color:var(--text3)" title="Configuración">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
     <div class="sync-wrap">
       <div class="sync-dot" id="sync-dot"></div>
       <span id="sync-label" style="font-size:10px;color:var(--text3)">–</span>
@@ -171,6 +239,10 @@
     <div class="form-group" id="row-destino" style="display:none">
       <label>Cuenta destino</label>
       <select id="f-destino"><option value="sari">Cuenta Sari</option><option value="milo">Cuenta Milo</option><option value="cash">Caja fuerte (efectivo)</option></select>
+    </div>
+    <div class="form-group" id="row-entidad">
+      <label>Entidad (Opcional)</label>
+      <select id="f-entidad" onchange="handleEntityChange(this)"><option value="">Sin entidad</option><option value="NEW">+ Nueva entidad...</option></select>
     </div>
     <div class="form-group" id="row-cat">
       <label>Categoría</label>
