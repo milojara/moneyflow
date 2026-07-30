@@ -6,15 +6,22 @@ var firebaseConfig = {
   messagingSenderId: "738074612940",
   appId: "1:738074612940:web:6bcfaa3419ce5cdb7ede69"
 };
-firebase.initializeApp(firebaseConfig);
+if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+}
 var db = firebase.firestore();
-var DOC = db.collection("familia").doc("estado");
+var auth = firebase.auth();
+
+// Constantes de Fase 1 (Autenticación e Identidad)
+const DEV_USER_ID = "hccreativo_uid"; 
+const WORKSPACE_ID = "workspace_hccreativo";
 
 var ACC_LABELS = {milo:'Cuenta Milo',sari:'Cuenta Sari',cash:'Caja fuerte'};
 var CAT_LABELS = {vivienda:'Vivienda',mercado:'Mercado',transporte:'Transporte',salud:'Salud',educacion:'Educación',entretenimiento:'Entretenimiento',ropa:'Ropa',servicios:'Servicios',tecnologia:'Tecnología',negocio:'Click and Roll',ahorro:'Ahorro',tc:'Tarjeta crédito',otro:'Otro'};
 var CAT_COLORS = {vivienda:'#378ADD',mercado:'#1D9E75',transporte:'#BA7517',salud:'#D4537E',educacion:'#534AB7',entretenimiento:'#D85A30',ropa:'#993C1D',servicios:'#639922',tecnologia:'#185FA5',negocio:'#3B6D11',ahorro:'#0F6E56',tc:'#8B3A62',otro:'#888780'};
 var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
+// Estado en memoria (Para retrocompatibilidad UI en Fase 1)
 var state = {transactions:[],goals:[],accounts:{milo:0,sari:0,cash:0},fixedExpenses:[],fixedChecks:{}};
 var txnType = 'ingreso';
 var editType = 'ingreso';
@@ -42,7 +49,6 @@ function getRawAmount(inputId) {
   return v ? parseFloat(v) : 0;
 }
 
-// ── DATE FIX: no timezone offset ──
 function todayStr() {
   var d = new Date();
   var y = d.getFullYear();
@@ -56,7 +62,6 @@ function setDate() {
   if (el) el.value = todayStr();
 }
 
-// ── SYNC STATUS ──
 function syncStatus(s) {
   var dot = document.getElementById('sync-dot');
   var lbl = document.getElementById('sync-label');
@@ -75,63 +80,165 @@ function toast(msg) {
 
 function fmt(n) { return '$'+Math.round(n||0).toLocaleString('es-CO'); }
 
-// ── FIREBASE ──
-function init() {
+// ── MIGRACIÓN A V1 (MULTI-TENANT & BILLETERAS) ──
+async function migrateToV1() {
+  const oldDocRef = db.collection("familia").doc("estado");
+  const oldSnap = await oldDocRef.get();
+  
+  if (!oldSnap.exists) return true; // Si no existe el doc viejo, no hay nada que migrar
+  
+  const oldData = oldSnap.data();
+  if (oldData.migrated_to_v1) return true; // Ya fue migrado
+  
+  console.log("Iniciando migración a V1...");
+  syncStatus('saving');
+  document.getElementById('loading-msg').textContent = "Actualizando arquitectura...";
+  
+  try {
+    // 1. Backup Inmutable
+    const backupRef = db.collection("backups_migracion").doc("estado_backup_" + Date.now());
+    await backupRef.set(oldData);
+    
+    // 2. Batch de migración
+    const batch = db.batch();
+    const wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+    
+    batch.set(wsRef, {
+      name: "Finanzas Familia",
+      ownerId: DEV_USER_ID,
+      members: [DEV_USER_ID],
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    
+    // Migrar Cuentas -> Billeteras
+    const accounts = oldData.accounts || {milo:0, sari:0, cash:0};
+    const wallets = [
+      { id: "milo", name: "Cuenta Milo", type: "banco", balance: accounts.milo||0, currency: "COP", status: "active", ownershipType: "personal", visibility: "owner", ownerId: "Camilo" },
+      { id: "sari", name: "Cuenta Sari", type: "banco", balance: accounts.sari||0, currency: "COP", status: "active", ownershipType: "personal", visibility: "owner", ownerId: "Sarita" },
+      { id: "cash", name: "Caja fuerte", type: "efectivo", balance: accounts.cash||0, currency: "COP", status: "active", ownershipType: "shared", visibility: "shared", ownerId: "Compartido" }
+    ];
+    wallets.forEach(w => {
+      batch.set(wsRef.collection("wallets").doc(w.id), { ...w, createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: DEV_USER_ID });
+    });
+    
+    // Migrar Transacciones
+    const txns = oldData.transactions || [];
+    txns.forEach(t => {
+      batch.set(wsRef.collection("transactions").doc(String(t.id)), {
+        type: t.type, amount: t.amount, description: t.desc, date: t.date,
+        walletId: t.cuenta, destinationWalletId: t.destino || null, categoryId: t.cat || 'otro',
+        status: "completed", origin: "migration", createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    
+    // Migrar Metas
+    const goals = oldData.goals || [];
+    goals.forEach(g => {
+      batch.set(wsRef.collection("goals").doc(String(g.id)), {
+        name: g.name, target: g.target, saved: g.saved, status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    
+    // Migrar Gastos Fijos
+    const fixedEx = oldData.fixedExpenses || [];
+    fixedEx.forEach(f => {
+      batch.set(wsRef.collection("fixed_expenses").doc(String(f.id)), {
+        name: f.name, amount: f.amount, categoryId: f.cat || 'otro', walletId: "milo",
+        state: "pending", createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+
+    // Migrar Fixed Checks (Temporal Fase 1)
+    const fixedChecks = oldData.fixedChecks || {};
+    batch.set(wsRef.collection("temp_legacy").doc("fixed_checks"), { data: fixedChecks });
+    
+    // Marcar como migrado
+    batch.update(oldDocRef, { migrated_to_v1: true });
+    
+    await batch.commit();
+    console.log("Migración completada con éxito.");
+    return true;
+  } catch (error) {
+    console.error("Error en migración:", error);
+    alert("Error crítico migrando datos. Revisa la consola.");
+    return false;
+  }
+}
+
+// ── FIREBASE INIT ──
+async function init() {
   var ml = document.getElementById('month-label');
   if (ml) ml.textContent = MONTHS[new Date().getMonth()]+' '+new Date().getFullYear();
   var fml = document.getElementById('fijos-month-label');
   if (fml) fml.textContent = MONTHS[new Date().getMonth()]+' '+new Date().getFullYear();
   setDate();
 
-  DOC.get().then(function(snap) {
+  // Fase 1: Auth Bypass (Iniciamos flujo de Workspace automáticamente)
+  const migrationSuccess = await migrateToV1();
+  if (migrationSuccess) {
     document.getElementById('loading').classList.add('hidden');
-    if (snap.exists) {
-      state = snap.data();
-      if (!state.accounts) state.accounts={milo:0,sari:0,cash:0};
-      if (!state.transactions) state.transactions=[];
-      if (!state.goals) state.goals=[];
-      if (!state.fixedExpenses) state.fixedExpenses=[];
-      if (!state.fixedChecks) state.fixedChecks={};
-    }
-    renderAll(); renderGoals(); renderFijos();
-    startListener();
+    startListeners();
     syncStatus('ok');
-  }).catch(function(err) {
-    document.getElementById('loading').classList.add('hidden');
-    syncStatus('err');
-    toast('⚠️ '+err.code);
-    renderAll(); renderGoals(); renderFijos();
+  }
+}
+
+function startListeners() {
+  const wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  // Escuchar Billeteras
+  wsRef.collection("wallets").onSnapshot(snap => {
+    state.accounts = {milo:0, sari:0, cash:0}; // Reset para UI legacy
+    snap.forEach(doc => {
+      state.accounts[doc.id] = doc.data().balance;
+    });
+    renderAll();
   });
-}
+  
+  // Escuchar Transacciones
+  wsRef.collection("transactions").orderBy("date", "desc").onSnapshot(snap => {
+    let txns = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      txns.push({
+        id: parseInt(doc.id), type: d.type, desc: d.description, amount: d.amount,
+        cuenta: d.walletId, destino: d.destinationWalletId, cat: d.categoryId, date: d.date
+      });
+    });
+    txns.sort((a,b) => b.id - a.id);
+    state.transactions = txns;
+    renderAll();
+    if(document.querySelector('.section.active') && document.querySelector('.section.active').id==='tab-movimientos') renderMovimientos();
+  });
+  
+  // Escuchar Metas
+  wsRef.collection("goals").onSnapshot(snap => {
+    let goals = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      goals.push({ id: parseInt(doc.id), name: d.name, target: d.target, saved: d.saved });
+    });
+    state.goals = goals;
+    renderGoals();
+  });
+  
+  // Escuchar Gastos Fijos
+  wsRef.collection("fixed_expenses").onSnapshot(snap => {
+    let fijos = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      fijos.push({ id: parseInt(doc.id), name: d.name, amount: d.amount, cat: d.categoryId });
+    });
+    state.fixedExpenses = fijos;
+    renderFijos();
+  });
 
-function startListener() {
-  DOC.onSnapshot(function(snap) {
-    if (!isSaving && snap.exists) {
-      state = snap.data();
-      if (!state.accounts) state.accounts={milo:0,sari:0,cash:0};
-      if (!state.transactions) state.transactions=[];
-      if (!state.goals) state.goals=[];
-      if (!state.fixedExpenses) state.fixedExpenses=[];
-      if (!state.fixedChecks) state.fixedChecks={};
-      renderAll();
-      var active = document.querySelector('.section.active');
-      if (active) {
-        if (active.id==='tab-movimientos') renderMovimientos();
-        if (active.id==='tab-metas') renderGoals();
-        if (active.id==='tab-fijos') renderFijos();
-      }
+  // Escuchar Legacy Fixed Checks (temporal)
+  wsRef.collection("temp_legacy").doc("fixed_checks").onSnapshot(snap => {
+    if (snap.exists) {
+      state.fixedChecks = snap.data().data || {};
+      renderFijos();
     }
-    syncStatus('ok');
-  }, function(err){ syncStatus('err'); });
-}
-
-// ── SAVE STATE ──
-function saveState(cb) {
-  isSaving = true; syncStatus('saving');
-  DOC.set(state).then(function(){
-    syncStatus('ok'); isSaving=false; if(cb) cb();
-  }).catch(function(err){
-    syncStatus('err'); isSaving=false; toast('⚠️ '+err.code);
   });
 }
 
@@ -148,7 +255,6 @@ function showTab(id) {
   if(id==='fijos') renderFijos();
 }
 
-// ── TYPE SELECTOR ──
 function setType(t) {
   txnType=t;
   ['ing','eg','tr'].forEach(function(x){document.getElementById('seg-'+x).classList.remove('active');});
@@ -158,7 +264,7 @@ function setType(t) {
   document.getElementById('label-cuenta').textContent=t==='transferencia'?'Cuenta origen':'Cuenta';
 }
 
-// ── SAVE TRANSACTION ──
+// ── ATOMIC BATCH SAVES (V1 ARCHITECTURE) ──
 function saveTransaction() {
   var desc=document.getElementById('f-desc').value.trim();
   var amount=getRawAmount('f-amount');
@@ -167,29 +273,42 @@ function saveTransaction() {
   var date=document.getElementById('f-date').value;
   var destino=document.getElementById('f-destino').value;
   if(!desc||!amount||amount<=0){alert('Completa descripción y monto');return;}
-  var txn={id:Date.now(),type:txnType,desc:desc,amount:amount,cuenta:cuenta,cat:cat,date:date};
-  if(txnType==='transferencia') txn.destino=destino;
-  applyTxn(txn, 1);
-  state.transactions.unshift(txn);
-  document.getElementById('f-desc').value='';
-  document.getElementById('f-amount').value='';
-  document.getElementById('f-amount-fmt').textContent='';
-  setDate();
-  renderAll();
-  saveState(function(){toast('✓ Guardado y sincronizado');});
-}
-
-function applyTxn(t, sign) {
-  // sign=1 to apply, sign=-1 to reverse
-  if(t.type==='ingreso') state.accounts[t.cuenta]=(state.accounts[t.cuenta]||0)+sign*t.amount;
-  else if(t.type==='egreso') state.accounts[t.cuenta]=(state.accounts[t.cuenta]||0)-sign*t.amount;
-  else{
-    state.accounts[t.cuenta]=(state.accounts[t.cuenta]||0)-sign*t.amount;
-    if(t.destino) state.accounts[t.destino]=(state.accounts[t.destino]||0)+sign*t.amount;
+  
+  var txnId = String(Date.now());
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  // Create Transaction
+  var tRef = wsRef.collection("transactions").doc(txnId);
+  batch.set(tRef, {
+      type: txnType, amount: amount, description: desc, date: date,
+      walletId: cuenta, destinationWalletId: txnType === 'transferencia' ? destino : null,
+      categoryId: txnType === 'transferencia' ? null : cat, status: "completed", origin: "manual",
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
+  });
+  
+  // Update Wallet(s)
+  var wRef = wsRef.collection("wallets").doc(cuenta);
+  if (txnType === 'ingreso') {
+    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  } else if (txnType === 'egreso') {
+    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  } else if (txnType === 'transferencia') {
+    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    var destRef = wsRef.collection("wallets").doc(destino);
+    batch.update(destRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
   }
+
+  isSaving = true; syncStatus('saving');
+  batch.commit().then(() => {
+    isSaving = false; syncStatus('ok'); toast('✓ Guardado y sincronizado');
+    document.getElementById('f-desc').value=''; document.getElementById('f-amount').value='';
+    document.getElementById('f-amount-fmt').textContent=''; setDate();
+  }).catch(err => {
+    isSaving = false; syncStatus('err'); toast('⚠️ '+err.message);
+  });
 }
 
-// ── EDIT MODAL ──
 function openEditModal(id) {
   var t=state.transactions.find(function(x){return x.id===id;});
   if(!t) return;
@@ -223,63 +342,116 @@ function saveEdit() {
   if(!editingId) return;
   var old=state.transactions.find(function(x){return x.id===editingId;});
   if(!old) return;
-  // reverse old effect
-  applyTxn(old, -1);
-  // apply new
+  
   var amount=getRawAmount('e-amount');
   if(!amount||amount<=0){alert('Ingresa un monto válido');return;}
-  old.type=editType;
-  old.desc=document.getElementById('e-desc').value.trim();
-  old.amount=amount;
-  old.cuenta=document.getElementById('e-cuenta').value;
-  old.cat=document.getElementById('e-cat').value;
-  old.date=document.getElementById('e-date').value;
-  if(editType==='transferencia') old.destino=document.getElementById('e-destino').value;
-  else delete old.destino;
-  applyTxn(old, 1);
-  closeEditModal();
-  renderAll(); renderMovimientos();
-  saveState(function(){toast('✓ Movimiento actualizado');});
+  
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  // 1. REVERSE OLD
+  var oldWRef = wsRef.collection("wallets").doc(old.cuenta);
+  if (old.type === 'ingreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+  else if (old.type === 'egreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
+  else if (old.type === 'transferencia') {
+    batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
+    var oldDestRef = wsRef.collection("wallets").doc(old.destino);
+    batch.update(oldDestRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+  }
+
+  // 2. APPLY NEW
+  var newCuenta = document.getElementById('e-cuenta').value;
+  var newDestino = document.getElementById('e-destino').value;
+  var newWRef = wsRef.collection("wallets").doc(newCuenta);
+  
+  if (editType === 'ingreso') batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(amount) });
+  else if (editType === 'egreso') batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(-amount) });
+  else if (editType === 'transferencia') {
+    batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(-amount) });
+    var newDestRef = wsRef.collection("wallets").doc(newDestino);
+    batch.update(newDestRef, { balance: firebase.firestore.FieldValue.increment(amount) });
+  }
+  
+  // 3. UPDATE TRANSACTION
+  var tRef = wsRef.collection("transactions").doc(String(editingId));
+  batch.update(tRef, {
+    type: editType, amount: amount, description: document.getElementById('e-desc').value.trim(),
+    date: document.getElementById('e-date').value, walletId: newCuenta,
+    destinationWalletId: editType === 'transferencia' ? newDestino : null,
+    categoryId: editType === 'transferencia' ? null : document.getElementById('e-cat').value,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: DEV_USER_ID
+  });
+
+  isSaving = true; syncStatus('saving');
+  batch.commit().then(() => {
+    isSaving = false; syncStatus('ok'); toast('✓ Movimiento actualizado');
+    closeEditModal();
+  }).catch(err => {
+    isSaving = false; syncStatus('err'); toast('⚠️ '+err.message);
+  });
 }
 
 function deleteFromModal() {
   if(!editingId||!confirm('¿Eliminar este movimiento?')) return;
-  var t=state.transactions.find(function(x){return x.id===editingId;});
-  if(t) applyTxn(t,-1);
-  state.transactions=state.transactions.filter(function(x){return x.id!==editingId;});
-  closeEditModal();
-  renderAll(); renderMovimientos();
-  saveState(function(){toast('✓ Eliminado');});
+  var old=state.transactions.find(function(x){return x.id===editingId;});
+  if(!old) return;
+
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  // 1. REVERSE
+  var oldWRef = wsRef.collection("wallets").doc(old.cuenta);
+  if (old.type === 'ingreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+  else if (old.type === 'egreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
+  else if (old.type === 'transferencia') {
+    batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
+    var oldDestRef = wsRef.collection("wallets").doc(old.destino);
+    batch.update(oldDestRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+  }
+
+  // 2. DELETE
+  var tRef = wsRef.collection("transactions").doc(String(editingId));
+  batch.delete(tRef);
+
+  isSaving = true; syncStatus('saving');
+  batch.commit().then(() => {
+    isSaving = false; syncStatus('ok'); toast('✓ Eliminado');
+    closeEditModal();
+  }).catch(err => {
+    isSaving = false; syncStatus('err'); toast('⚠️ '+err.message);
+  });
 }
 
-// ── GOALS ──
 function saveGoal() {
   var name=document.getElementById('g-name').value.trim();
   var target=getRawAmount('g-target');
   var saved=getRawAmount('g-saved');
   if(!name||!target||target<=0){alert('Completa nombre y monto objetivo');return;}
-  state.goals.push({id:Date.now(),name:name,target:target,saved:saved});
-  document.getElementById('g-name').value='';
-  document.getElementById('g-target').value=''; document.getElementById('g-target-fmt').textContent='';
-  document.getElementById('g-saved').value=''; document.getElementById('g-saved-fmt').textContent='';
-  renderGoals();
-  saveState(function(){toast('✓ Meta creada');});
+  
+  var gId = String(Date.now());
+  var gRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(gId);
+  gRef.set({ name: name, target: target, saved: saved, status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp() })
+  .then(() => {
+    document.getElementById('g-name').value='';
+    document.getElementById('g-target').value=''; document.getElementById('g-target-fmt').textContent='';
+    document.getElementById('g-saved').value=''; document.getElementById('g-saved-fmt').textContent='';
+    toast('✓ Meta creada');
+  });
 }
 
 function deleteGoal(id) {
   if(!confirm('¿Eliminar esta meta?')) return;
-  state.goals=state.goals.filter(function(g){return g.id!==id;});
-  renderGoals(); saveState();
+  db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(String(id)).delete().then(()=>{ toast('✓ Eliminada'); });
 }
 
 function addToGoal(id) {
   var amt=parseFloat(prompt('¿Cuánto quieres abonar? (COP $)'));
   if(!amt||amt<=0) return;
-  var g=state.goals.find(function(x){return x.id===id;});
-  if(g){g.saved=Math.min(g.saved+amt,g.target);renderGoals();saveState(function(){toast('✓ Abono registrado');});}
+  var gRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(String(id));
+  gRef.update({ saved: firebase.firestore.FieldValue.increment(amt), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+  .then(() => { toast('✓ Abono registrado'); });
 }
 
-// ── FIXED EXPENSES ──
 function openFixedModal(id) {
   editingFixedId=id;
   if(id) {
@@ -313,31 +485,36 @@ function saveFixedItem() {
   var amount=getRawAmount('fx-amount');
   var cat=document.getElementById('fx-cat').value;
   if(!name||!amount||amount<=0){alert('Completa nombre y monto');return;}
+  
+  var fRef;
   if(editingFixedId) {
-    var fx=state.fixedExpenses.find(function(x){return x.id===editingFixedId;});
-    if(fx){fx.name=name;fx.amount=amount;fx.cat=cat;}
+    fRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(editingFixedId));
+    fRef.update({ name: name, amount: amount, categoryId: cat, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }).then(() => {
+      closeFixedModal(); toast('✓ Gasto actualizado');
+    });
   } else {
-    state.fixedExpenses.push({id:Date.now(),name:name,amount:amount,cat:cat});
+    fRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(Date.now()));
+    fRef.set({ name: name, amount: amount, categoryId: cat, walletId: "milo", state: "pending", createdAt: firebase.firestore.FieldValue.serverTimestamp() }).then(() => {
+      closeFixedModal(); toast('✓ Gasto fijo agregado');
+    });
   }
-  closeFixedModal();
-  renderFijos();
-  saveState(function(){toast(editingFixedId?'✓ Gasto actualizado':'✓ Gasto fijo agregado');});
 }
 
 function deleteFixedItem(id) {
   if(!confirm('¿Eliminar este gasto fijo?')) return;
-  state.fixedExpenses=state.fixedExpenses.filter(function(x){return x.id!==id;});
-  // clean checks
+  db.collection("workspaces").doc(WORKSPACE_ID).collection("fixed_expenses").doc(String(id)).delete();
+  
+  // Clean checks
   var key=todayStr().slice(0,7)+'-'+id;
-  if(state.fixedChecks[key]!==undefined) delete state.fixedChecks[key];
-  renderFijos(); saveState();
+  var checksRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("temp_legacy").doc("fixed_checks");
+  checksRef.update({ [`data.${key}`]: firebase.firestore.FieldValue.delete() });
 }
 
 function toggleFixedCheck(id) {
   var key=todayStr().slice(0,7)+'-'+id;
-  state.fixedChecks[key]=!state.fixedChecks[key];
-  renderFijos();
-  saveState();
+  var checksRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("temp_legacy").doc("fixed_checks");
+  var isC = isChecked(id);
+  checksRef.set({ data: { [key]: !isC } }, { merge: true });
 }
 
 function isChecked(id) {
@@ -345,7 +522,7 @@ function isChecked(id) {
   return !!state.fixedChecks[key];
 }
 
-// ── RENDER ──
+// ── RENDER COMPATIBILITY (NO CHANGES TO LOGIC) ──
 function getThisMonth() {
   var now=new Date();
   return state.transactions.filter(function(t){
@@ -422,7 +599,6 @@ function renderFijos() {
   var coverage=totalFijos>0?Math.min(Math.round(ing/totalFijos*100),200):100;
   var coverageColor=ing>=totalFijos?'var(--green)':ing>=totalFijos*0.7?'var(--gold)':'var(--red)';
 
-  // Summary
   var sumEl=document.getElementById('fijos-summary');
   sumEl.innerHTML='<div class="summary-row"><span>Total gastos fijos</span><span>'+fmt(totalFijos)+'</span></div>'+
     '<div class="summary-row"><span>✓ Pagado</span><span style="color:var(--green)">'+fmt(totalPagado)+'</span></div>'+
@@ -432,7 +608,6 @@ function renderFijos() {
     '<div class="summary-row"><span>Ingresos del mes</span><span style="color:'+(ing>=totalFijos?'var(--green)':'var(--red)')+'">'+fmt(ing)+'</span></div>'+
     (ing<totalFijos?'<div style="font-size:12px;color:var(--red);margin-top:4px">⚠️ Faltan '+fmt(totalFijos-ing)+' para cubrir todos los gastos fijos</div>':'<div style="font-size:12px;color:var(--green);margin-top:4px">✓ Los ingresos cubren todos los gastos fijos</div>');
 
-  // List
   var listEl=document.getElementById('fijos-list');
   if(!fijos.length){listEl.innerHTML='<div class="empty" style="padding:20px 0">Agrega tus gastos fijos mensuales</div>';return;}
   listEl.innerHTML=fijos.map(function(f){
