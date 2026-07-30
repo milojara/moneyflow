@@ -22,7 +22,7 @@ var CAT_COLORS = {vivienda:'#378ADD',mercado:'#1D9E75',transporte:'#BA7517',salu
 var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
 // Estado en memoria
-var state = {transactions:[],goals:[],accounts:{milo:0,sari:0,cash:0},fixedExpenses:[],entities:[]};
+var state = {transactions:[],goals:[],accounts:{milo:0,sari:0,cash:0},fixedExpenses:[],entities:[],debts:[]};
 var txnType = 'ingreso';
 var editType = 'ingreso';
 var editingId = null;
@@ -31,6 +31,10 @@ var isSaving = false;
 
 var pendingSelectId = null;
 var editingEntityId = null;
+
+var debtType = 'to_pay';
+var editingDebtId = null;
+var payingDebtId = null;
 
 // ── AMOUNT FORMATTING ──
 function formatAmountInput(input, fmtId) {
@@ -202,7 +206,7 @@ function startListeners() {
     state.transactions = txns;
     renderAll();
     if(document.querySelector('.section.active') && document.querySelector('.section.active').id==='tab-movimientos') renderMovimientos();
-    if(document.querySelector('.section.active') && document.querySelector('.section.active').id==='tab-fijos') renderFijos();
+    if(document.querySelector('.section.active') && document.querySelector('.section.active').id==='tab-compromisos') { renderFijos(); renderDebts(); }
   });
   
   wsRef.collection("goals").onSnapshot(snap => {
@@ -228,6 +232,19 @@ function startListeners() {
     fijos.sort((a,b) => a.dueDay - b.dueDay);
     state.fixedExpenses = fijos;
     renderFijos();
+  });
+  
+  wsRef.collection("debts").onSnapshot(snap => {
+    let dArr = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      dArr.push({ 
+        id: parseInt(doc.id), name: d.name, initialAmount: d.initialAmount, type: d.type, 
+        entityId: d.entityId || null, status: d.status || 'active' 
+      });
+    });
+    state.debts = dArr;
+    renderDebts();
   });
 }
 
@@ -271,7 +288,7 @@ function handleEntityChange(sel) {
 function updateEntitySelects() {
   var html = '<option value="">Sin entidad</option><option value="NEW">+ Nueva entidad...</option>';
   state.entities.forEach(e => { html += '<option value="'+e.id+'">'+e.name+'</option>'; });
-  ['f-entidad', 'e-entidad', 'fx-entidad'].forEach(id => {
+  ['f-entidad', 'e-entidad', 'fx-entidad', 'd-entidad'].forEach(id => {
     var sel = document.getElementById(id);
     if(sel) {
       var val = sel.value;
@@ -327,12 +344,22 @@ function showTab(id) {
   document.querySelectorAll('.section').forEach(function(s){s.classList.remove('active');});
   document.querySelectorAll('.btab').forEach(function(b){b.classList.remove('active');});
   document.getElementById('tab-'+id).classList.add('active');
-  ['resumen','nuevo','movimientos','metas','fijos'].forEach(function(t,i){
+  ['resumen','nuevo','movimientos','metas','compromisos'].forEach(function(t,i){
     if(t===id) document.querySelectorAll('.btab')[i].classList.add('active');
   });
   if(id==='movimientos') renderMovimientos();
   if(id==='metas') renderGoals();
-  if(id==='fijos') renderFijos();
+  if(id==='compromisos') { renderFijos(); renderDebts(); }
+}
+
+function showCompromisoTab(tabId) {
+  document.getElementById('cseg-fijos').classList.remove('active');
+  document.getElementById('cseg-deudas').classList.remove('active');
+  document.getElementById('cseg-' + tabId).classList.add('active');
+  document.getElementById('comp-fijos').style.display = tabId === 'fijos' ? 'block' : 'none';
+  document.getElementById('comp-deudas').style.display = tabId === 'deudas' ? 'block' : 'none';
+  if(tabId === 'fijos') renderFijos();
+  if(tabId === 'deudas') renderDebts();
 }
 
 function setType(t) {
@@ -635,6 +662,181 @@ function payFixedExpense(id) {
   });
 }
 
+// ── COMPROMISOS (DEUDAS) ──
+function setDebtType(t) {
+  debtType = t;
+  document.getElementById('dseg-pay').classList.remove('active');
+  document.getElementById('dseg-rec').classList.remove('active');
+  document.getElementById(t === 'to_pay' ? 'dseg-pay' : 'dseg-rec').classList.add('active');
+}
+
+function openDebtModal(id) {
+  editingDebtId = id;
+  if(id) {
+    var d = state.debts.find(x => x.id === id);
+    if(d) {
+      document.getElementById('d-name').value = d.name;
+      document.getElementById('d-amount').value = String(Math.round(d.initialAmount));
+      document.getElementById('d-amount-fmt').textContent = '$ ' + Math.round(d.initialAmount).toLocaleString('es-CO');
+      document.getElementById('d-entidad').value = d.entityId || '';
+      setDebtType(d.type || 'to_pay');
+      document.getElementById('debt-modal-title').textContent = 'Editar Deuda';
+      document.getElementById('debt-modal-btn').textContent = 'Guardar cambios';
+    }
+  } else {
+    document.getElementById('d-name').value = '';
+    document.getElementById('d-amount').value = '';
+    document.getElementById('d-amount-fmt').textContent = '';
+    document.getElementById('d-entidad').value = '';
+    setDebtType('to_pay');
+    document.getElementById('debt-modal-title').textContent = 'Nueva Deuda';
+    document.getElementById('debt-modal-btn').textContent = 'Guardar deuda';
+  }
+  document.getElementById('debt-modal').classList.add('open');
+}
+
+function closeDebtModal() {
+  document.getElementById('debt-modal').classList.remove('open');
+  editingDebtId = null;
+}
+
+function saveDebt() {
+  var name = document.getElementById('d-name').value.trim();
+  var amount = getRawAmount('d-amount');
+  var entidad = document.getElementById('d-entidad').value;
+  if(!name || !amount || amount <= 0) { alert('Completa nombre y monto inicial'); return; }
+  
+  var dRef;
+  if(editingDebtId) {
+    dRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("debts").doc(String(editingDebtId));
+    dRef.update({ 
+      name: name, initialAmount: amount, type: debtType, entityId: entidad || null, 
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
+    }).then(() => {
+      closeDebtModal(); toast('✓ Deuda actualizada');
+    });
+  } else {
+    dRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("debts").doc(String(Date.now()));
+    dRef.set({ 
+      name: name, initialAmount: amount, type: debtType, entityId: entidad || null, 
+      status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp() 
+    }).then(() => {
+      closeDebtModal(); toast('✓ Deuda creada');
+    });
+  }
+}
+
+function deleteDebt(id) {
+  if(!confirm('¿Archivar esta deuda? Ya no aparecerá en la lista activa.')) return;
+  db.collection("workspaces").doc(WORKSPACE_ID).collection("debts").doc(String(id)).update({ status: 'archived', updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+}
+
+function openDebtPayModal(id) {
+  payingDebtId = id;
+  var d = state.debts.find(x => x.id === id);
+  if(!d) return;
+  
+  var totalPaid = state.transactions.filter(t => t.origin === 'debtPayment' && String(t.commitmentId) === String(id)).reduce((a,t) => a + t.amount, 0);
+  var pending = d.initialAmount - totalPaid;
+  
+  document.getElementById('debt-pay-title').textContent = d.type === 'to_pay' ? 'Abonar a deuda' : 'Recibir pago';
+  document.getElementById('debt-pay-info').textContent = 'Saldo pendiente: ' + fmt(pending);
+  document.getElementById('dp-wallet-label').textContent = d.type === 'to_pay' ? 'Pagar desde' : 'Recibir en';
+  document.getElementById('dp-amount').value = '';
+  document.getElementById('dp-amount-fmt').textContent = '';
+  document.getElementById('debt-pay-modal').classList.add('open');
+}
+
+function closeDebtPayModal() {
+  document.getElementById('debt-pay-modal').classList.remove('open');
+  payingDebtId = null;
+}
+
+function processDebtPayment() {
+  if(!payingDebtId) return;
+  var d = state.debts.find(x => x.id === payingDebtId);
+  if(!d) return;
+  
+  var amount = getRawAmount('dp-amount');
+  var wallet = document.getElementById('dp-wallet').value;
+  if(!amount || amount <= 0) { alert('Monto inválido'); return; }
+  
+  var txnType = d.type === 'to_pay' ? 'egreso' : 'ingreso';
+  var txnId = String(Date.now());
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  var tRef = wsRef.collection("transactions").doc(txnId);
+  batch.set(tRef, {
+      type: txnType, amount: amount, description: 'Abono: ' + d.name, date: todayStr(),
+      walletId: wallet, destinationWalletId: null,
+      categoryId: 'otro', entityId: d.entityId || null,
+      status: "completed", origin: "debtPayment", commitmentId: String(d.id),
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
+  });
+  
+  var wRef = wsRef.collection("wallets").doc(wallet);
+  if(txnType === 'egreso') {
+    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  } else {
+    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  }
+  
+  syncStatus('saving');
+  batch.commit().then(() => {
+    syncStatus('ok'); toast('✓ Abono registrado');
+    closeDebtPayModal();
+  }).catch(err => {
+    syncStatus('err'); toast('⚠️ '+err.message);
+  });
+}
+
+function renderDebts() {
+  var el = document.getElementById('debts-list');
+  if(!state.debts) return;
+  
+  var activeDebts = state.debts.filter(d => d.status !== 'archived');
+  
+  if(!activeDebts.length) { 
+    el.innerHTML = '<div class="empty" style="padding:20px 0">No tienes deudas activas</div>'; 
+    return; 
+  }
+  
+  el.innerHTML = activeDebts.map(d => {
+    var totalPaid = state.transactions.filter(t => t.origin === 'debtPayment' && String(t.commitmentId) === String(d.id)).reduce((a,t) => a + t.amount, 0);
+    var pending = d.initialAmount - totalPaid;
+    var isPaidOff = pending <= 0;
+    
+    var entObj = d.entityId ? state.entities.find(e => e.id === d.entityId) : null;
+    var entStr = entObj ? entObj.name : '';
+    
+    var typeBadge = d.type === 'to_pay' ? '<span class="badge-status badge-overdue">Yo debo</span>' : '<span class="badge-status badge-upcoming">Me deben</span>';
+    var statusBadge = isPaidOff ? '<span class="badge-status badge-paid">Saldada</span>' : '';
+    
+    var pct = Math.min(Math.round(totalPaid / d.initialAmount * 100), 100);
+    
+    var payBtn = !isPaidOff ? '<button class="btn-outline" style="font-size:11px;padding:5px 10px;border-radius:6px;margin-right:6px" onclick="openDebtPayModal('+d.id+')">Abonar</button>' : '';
+    
+    return '<div class="goal-card" style="margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:start">'+
+        '<div>'+
+          '<div style="margin-bottom:4px">'+typeBadge + (statusBadge ? ' ' + statusBadge : '') +'</div>'+
+          '<div class="goal-name">'+d.name+'</div>'+
+          '<div class="goal-sub">'+entStr+'</div>'+
+        '</div>'+
+        '<div style="display:flex;align-items:start">'+
+          payBtn +
+          '<button class="icon-btn edit" onclick="openDebtModal('+d.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'+
+          '<button class="icon-btn del" onclick="deleteDebt('+d.id+')" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button>'+
+        '</div>'+
+      '</div>'+
+      '<div class="goal-bar-bg" style="margin-top:12px"><div class="goal-bar-fill" style="width:'+pct+'%;background:'+(isPaidOff?'var(--green)':'var(--text2)')+'"></div></div>'+
+      '<div class="goal-footer"><span>Abonado: <strong>'+fmt(totalPaid)+'</strong></span><strong>'+pct+'%</strong><span>Pendiente: <strong>'+fmt(Math.max(pending,0))+'</strong></span></div>'+
+    '</div>';
+  }).join('');
+}
+
+
 // ── RENDER COMPATIBILITY ──
 function getThisMonth() {
   var now=new Date();
@@ -747,7 +949,7 @@ function renderFijos() {
     (ing<totalFijos?'<div style="font-size:12px;color:var(--red);margin-top:4px">⚠️ Faltan '+fmt(totalFijos-ing)+' para cubrir todos los gastos fijos</div>':'<div style="font-size:12px;color:var(--green);margin-top:4px">✓ Los ingresos cubren todos los gastos fijos</div>');
 
   var listEl=document.getElementById('fijos-list');
-  var activeEnriched = enriched.filter(f => f.status !== 'archived' || f.isPaid); // Mostrar archivados solo si se pagaron este mes antes de archivar
+  var activeEnriched = enriched.filter(f => f.status !== 'archived' || f.isPaid); 
   if(!activeEnriched.length){listEl.innerHTML='<div class="empty" style="padding:20px 0">Agrega tus gastos fijos mensuales</div>';return;}
   
   listEl.innerHTML=activeEnriched.map(function(f){

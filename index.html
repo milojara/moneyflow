@@ -178,6 +178,58 @@
   </div>
 </div>
 
+<!-- DEBT CRUD MODAL -->
+<div class="modal-overlay" id="debt-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="debt-modal-title">Nueva Deuda</div>
+      <button class="modal-close" onclick="closeDebtModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="seg-control" style="margin-bottom:14px">
+      <button class="seg-btn active" id="dseg-pay" onclick="setDebtType('to_pay')">Yo debo</button>
+      <button class="seg-btn" id="dseg-rec" onclick="setDebtType('to_receive')">Me deben</button>
+    </div>
+    <div class="form-group"><label>Nombre de la deuda</label><input type="text" id="d-name" placeholder="ej. Préstamo Vehículo, Tarjeta..."></div>
+    <div class="form-group">
+      <label>Entidad vinculada</label>
+      <select id="d-entidad" onchange="handleEntityChange(this)"><option value="">Sin entidad</option><option value="NEW">+ Nueva entidad...</option></select>
+    </div>
+    <div class="form-group">
+      <label>Monto Inicial (COP $)</label>
+      <div class="amount-wrap">
+        <span class="amount-currency">$</span>
+        <input type="text" id="d-amount" inputmode="numeric" placeholder="0" oninput="formatAmountInput(this,'d-amount-fmt')">
+      </div>
+      <div class="amount-formatted" id="d-amount-fmt"></div>
+    </div>
+    <button class="btn-save" id="debt-modal-btn" onclick="saveDebt()">Guardar deuda</button>
+  </div>
+</div>
+
+<!-- PAY DEBT MODAL -->
+<div class="modal-overlay" id="debt-pay-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="debt-pay-title">Abonar a deuda</div>
+      <button class="modal-close" onclick="closeDebtPayModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:14px;text-align:center" id="debt-pay-info">Saldo pendiente: $0</div>
+    <div class="form-group">
+      <label>Monto a abonar (COP $)</label>
+      <div class="amount-wrap">
+        <span class="amount-currency">$</span>
+        <input type="text" id="dp-amount" inputmode="numeric" placeholder="0" oninput="formatAmountInput(this,'dp-amount-fmt')">
+      </div>
+      <div class="amount-formatted" id="dp-amount-fmt"></div>
+    </div>
+    <div class="form-group">
+      <label id="dp-wallet-label">Cuenta origen</label>
+      <select id="dp-wallet"><option value="milo">Cuenta Milo</option><option value="sari">Cuenta Sari</option><option value="cash">Caja fuerte</option></select>
+    </div>
+    <button class="btn-save" onclick="processDebtPayment()">Registrar abono</button>
+  </div>
+</div>
+
 <div class="app-header">
   <div class="header-top">
     <div class="app-name">Finanzas Familia <span>Milo & Sari</span></div>
@@ -311,17 +363,30 @@
   <div id="goals-list"></div>
 </div>
 
-<!-- GASTOS FIJOS -->
-<div class="section" id="tab-fijos">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <div style="font-size:13px;color:var(--text2)" id="fijos-month-label"></div>
-    <button class="btn-outline" onclick="openFixedModal(null)" style="font-size:12px;padding:7px 12px">+ Agregar</button>
+<!-- COMPROMISOS -->
+<div class="section" id="tab-compromisos">
+  <div class="seg-control" style="margin-bottom:14px">
+    <button class="seg-btn active" id="cseg-fijos" onclick="showCompromisoTab('fijos')">Gastos Fijos</button>
+    <button class="seg-btn" id="cseg-deudas" onclick="showCompromisoTab('deudas')">Deudas</button>
   </div>
 
-  <div class="summary-bar" id="fijos-summary"></div>
+  <div id="comp-fijos">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:13px;color:var(--text2)" id="fijos-month-label"></div>
+      <button class="btn-outline" onclick="openFixedModal(null)" style="font-size:12px;padding:7px 12px">+ Agregar</button>
+    </div>
+    <div class="summary-bar" id="fijos-summary"></div>
+    <div class="section-title">Gastos fijos del mes</div>
+    <div class="card" style="padding:0 14px"><div id="fijos-list"></div></div>
+  </div>
 
-  <div class="section-title">Gastos fijos del mes</div>
-  <div class="card" style="padding:0 14px"><div id="fijos-list"></div></div>
+  <div id="comp-deudas" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:13px;color:var(--text2)">Tus préstamos y créditos</div>
+      <button class="btn-outline" onclick="openDebtModal(null)" style="font-size:12px;padding:7px 12px">+ Agregar</button>
+    </div>
+    <div id="debts-list"></div>
+  </div>
 </div>
 
 <div class="bottom-tabs">
@@ -341,9 +406,9 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="4"/></svg>
     Metas<div class="btab-dot"></div>
   </button>
-  <button class="btab" onclick="showTab('fijos')">
+  <button class="btab" onclick="showTab('compromisos')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-    Fijos<div class="btab-dot"></div>
+    Compromisos<div class="btab-dot"></div>
   </button>
 </div>
 
