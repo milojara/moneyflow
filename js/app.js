@@ -342,6 +342,13 @@ async function init() {
 
 function startListeners() {
   const wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+
+  wsRef.onSnapshot(snap => {
+    if(snap.exists) {
+      workspaceSettings = snap.data().settings || {};
+      renderOnboardingChecklist();
+    }
+  });
   
   wsRef.collection("entities").onSnapshot(snap => {
     let ents = [];
@@ -494,7 +501,6 @@ function startListeners() {
     state.debts = dArr;
     renderDebts();
   });
-}
 
   wsRef.collection("instruments").onSnapshot(snap => {
     let iArr = [];
@@ -506,6 +512,8 @@ function startListeners() {
     updateWalletSelects();
     renderInstruments();
   });
+}
+
 
 
 // ── GESTIÓN DE WALLETS ──
