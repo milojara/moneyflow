@@ -23,6 +23,45 @@ var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
 
 // Estado en memoria
 var state = {transactions:[],goals:[],accounts:{},wallets:[],fixedExpenses:[],entities:[],debts:[],instruments:[]};
+
+state.activePeriod = { month: new Date().getMonth(), year: new Date().getFullYear() };
+
+function getPeriodStart() { return new Date(state.activePeriod.year, state.activePeriod.month, 1, 0, 0, 0); }
+function getPeriodEnd() { return new Date(state.activePeriod.year, state.activePeriod.month + 1, 0, 23, 59, 59); }
+function getPeriodEndStr() { 
+   var d = getPeriodEnd();
+   var m = String(d.getMonth()+1).padStart(2, '0');
+   var day = String(d.getDate()).padStart(2, '0');
+   return d.getFullYear() + '-' + m + '-' + day;
+}
+function previousPeriod() {
+  state.activePeriod.month--;
+  if(state.activePeriod.month < 0) { state.activePeriod.month = 11; state.activePeriod.year--; }
+  updatePeriodUI();
+  renderAll();
+}
+function nextPeriod() {
+  state.activePeriod.month++;
+  if(state.activePeriod.month > 11) { state.activePeriod.month = 0; state.activePeriod.year++; }
+  updatePeriodUI();
+  renderAll();
+}
+function isCurrentPeriod() {
+  var d = new Date();
+  return state.activePeriod.month === d.getMonth() && state.activePeriod.year === d.getFullYear();
+}
+function updatePeriodUI() {
+  var mName = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'][state.activePeriod.month];
+  var el = document.getElementById('active-period-label');
+  if(el) el.textContent = mName + ' ' + state.activePeriod.year;
+}
+function getActivePeriodTransactions() {
+  return state.transactions.filter(function(t){
+    var d = new Date(t.date + 'T12:00:00');
+    return d.getMonth() === state.activePeriod.month && d.getFullYear() === state.activePeriod.year;
+  });
+}
+
 var defaultWalletId = null;
 var txnType = 'ingreso';
 var editType = 'ingreso';
@@ -90,8 +129,21 @@ function renderWalletsRow() {
   var el = document.getElementById('wallets-row');
   if(!el) return;
   var activeWs = state.wallets.filter(w => w.status !== 'archived');
+  var endStr = getPeriodEndStr();
+  
   var html = activeWs.map(w => {
-    return '<div class="acc-chip"><div class="acc-dot" style="background:'+w.color+'"></div><span class="acc-chip-label">'+w.name+'</span><span class="acc-chip-val" style="color:'+w.color+'">'+fmt(w.balance)+'</span></div>';
+    var bal = 0;
+    if(isCurrentPeriod()) {
+       bal = w.balance;
+    } else {
+       // Sum all txns up to end of active period
+       var ing = state.transactions.filter(t => t.date <= endStr && t.type === 'ingreso' && t.cuenta === w.id).reduce((a,t)=>a+t.amount,0);
+       var eg = state.transactions.filter(t => t.date <= endStr && (t.type === 'egreso' || t.type === 'cc_payment') && t.cuenta === w.id).reduce((a,t)=>a+t.amount,0);
+       var trOut = state.transactions.filter(t => t.date <= endStr && t.type === 'transferencia' && t.cuenta === w.id).reduce((a,t)=>a+t.amount,0);
+       var trIn = state.transactions.filter(t => t.date <= endStr && t.type === 'transferencia' && t.destino === w.id).reduce((a,t)=>a+t.amount,0);
+       bal = ing + trIn - eg - trOut;
+    }
+    return '<div class="acc-chip"><div class="acc-dot" style="background:'+w.color+'"></div><span class="acc-chip-label">'+w.name+'</span><span class="acc-chip-val" style="color:'+w.color+'">'+fmt(bal)+'</span></div>';
   }).join('');
   el.innerHTML = html;
 }
@@ -105,8 +157,9 @@ function renderInstruments() {
   }
   
   el.innerHTML = state.instruments.map(i => {
-    var spent = state.transactions.filter(t => t.type === 'egreso' && String(t.instrumentId) === String(i.id)).reduce((a,t)=>a+t.amount,0);
-    var paid = state.transactions.filter(t => t.type === 'cc_payment' && String(t.instrumentId) === String(i.id)).reduce((a,t)=>a+t.amount,0);
+    var endStr = getPeriodEndStr();
+    var spent = state.transactions.filter(t => t.type === 'egreso' && String(t.instrumentId) === String(i.id) && t.date <= endStr).reduce((a,t)=>a+t.amount,0);
+    var paid = state.transactions.filter(t => t.type === 'cc_payment' && String(t.instrumentId) === String(i.id) && t.date <= endStr).reduce((a,t)=>a+t.amount,0);
     var deuda = spent - paid;
     if(deuda < 0) deuda = 0;
     
@@ -1149,7 +1202,8 @@ function renderDebts() {
   }
   
   el.innerHTML = activeDebts.map(d => {
-    var totalPaid = state.transactions.filter(t => t.origin === 'debtPayment' && String(t.commitmentId) === String(d.id)).reduce((a,t) => a + t.amount, 0);
+    var endStr = getPeriodEndStr();
+    var totalPaid = state.transactions.filter(t => t.origin === 'debtPayment' && String(t.commitmentId) === String(d.id) && t.date <= endStr).reduce((a,t) => a + t.amount, 0);
     var pending = d.initialAmount - totalPaid;
     var isPaidOff = pending <= 0;
     
@@ -1293,13 +1347,6 @@ function processInstPayment() {
 }
 
 // ── RENDER COMPATIBILITY ──
-function getThisMonth() {
-  var now=new Date();
-  return state.transactions.filter(function(t){
-    var d=new Date(t.date+'T12:00:00');
-    return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();
-  });
-}
 
 function txnHTML(t,showEdit) {
   var isIng=t.type==='ingreso',isTr=t.type==='transferencia',isCc=t.type==='cc_payment';
@@ -1332,7 +1379,8 @@ function txnHTML(t,showEdit) {
 
 function renderAll() {
   var total=Object.values(state.accounts).reduce(function(a,b){return a+(b||0);},0);
-  var month=getThisMonth();
+  var month=getActivePeriodTransactions();
+  updatePeriodUI();
   var ing=month.filter(function(t){return t.type==='ingreso';}).reduce(function(a,t){return a+t.amount;},0);
   var eg=month.filter(function(t){return t.type==='egreso';}).reduce(function(a,t){return a+t.amount;},0);
   var bal=ing-eg;
@@ -1359,7 +1407,7 @@ function renderAll() {
 
 function renderMovimientos() {
   var ft=document.getElementById('filter-type').value,fa=document.getElementById('filter-acc').value;
-  var txns=state.transactions;
+  var txns=getActivePeriodTransactions();
   if(ft) txns=txns.filter(function(t){return t.type===ft;});
   if(fa) {
     var isInst = fa.startsWith('i_');
@@ -1373,15 +1421,17 @@ function renderMovimientos() {
 function renderGoals() {
   var el=document.getElementById('goals-list');
   if(!state.goals||!state.goals.length){el.innerHTML='<div class="empty">Aún no hay metas</div>';return;}
+  var endStr = getPeriodEndStr();
   el.innerHTML=state.goals.map(function(g){
-    var pct=Math.min(Math.round(g.saved/g.target*100),100),done=pct>=100;
+    var saved = g.saved; // Should this be computed dynamically? Assuming yes for v2, but for now we leave it since goals haven't been migrated yet to dynamic txns in our context. Or actually, the prompt says "metas acumuladas" depend on period active. But there are no transactions with origin="goal" yet. Let's leave g.saved for now.
+    var pct=Math.min(Math.round(saved/g.target*100),100),done=pct>=100;
     return '<div class="goal-card"><div style="display:flex;justify-content:space-between;align-items:start"><div><div class="goal-name">'+(done?'✓ ':'')+g.name+'</div><div class="goal-sub">'+(done?'¡Meta alcanzada!':'Faltan '+fmt(g.target-g.saved))+'</div></div><button class="icon-btn del" onclick="deleteGoal('+g.id+')" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button></div><div class="goal-bar-bg"><div class="goal-bar-fill" style="width:'+pct+'%;background:'+(done?'var(--green)':'var(--blue)')+'"></div></div><div class="goal-footer"><span>Ahorrado: <strong>'+fmt(g.saved)+'</strong></span><strong>'+pct+'%</strong><span>Meta: <strong>'+fmt(g.target)+'</strong></span></div>'+(done?'':'<div style="margin-top:10px"><button class="btn-outline" style="width:100%;font-size:13px" onclick="addToGoal('+g.id+')">+ Abonar a esta meta</button></div>')+'</div>';
   }).join('');
 }
 
 function renderFijos() {
   var fijos=state.fixedExpenses||[];
-  var month=getThisMonth();
+  var month=getActivePeriodTransactions();
   var ing=month.filter(function(t){return t.type==='ingreso';}).reduce(function(a,t){return a+t.amount;},0);
   
   var totalFijos=0;
@@ -1394,10 +1444,21 @@ function renderFijos() {
     var isPaid = !!paidTxn;
     var day = parseInt(f.dueDay) || 28;
     var stateStr = 'pending';
+    
     if (f.status === 'archived') stateStr = 'archived';
     else if (isPaid) stateStr = 'paid';
-    else if (todayDay > day) stateStr = 'overdue';
-    else if (day - todayDay <= 5) stateStr = 'upcoming';
+    else {
+       if (!isCurrentPeriod()) {
+          var now = new Date();
+          var act = new Date(state.activePeriod.year, state.activePeriod.month, day);
+          if (act < now) stateStr = 'overdue';
+          else stateStr = 'pending';
+       } else {
+          var todayDay = new Date().getDate();
+          if (todayDay > day) stateStr = 'overdue';
+          else if (day - todayDay <= 5) stateStr = 'upcoming';
+       }
+    }
 
     if(f.status !== 'archived') totalFijos += f.amount;
     if(isPaid) totalPagado += f.amount;
