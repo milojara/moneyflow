@@ -35,6 +35,16 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16" style="color:var(--text3);stroke-width:2"><path d="M9 18l6-6-6-6"/></svg>
       </div>
     </div>
+    
+    <div class="card" style="margin-top:14px;padding:0">
+      <div class="fixed-item" style="padding:14px;cursor:pointer" onclick="openWalletListModal()">
+        <div class="fixed-info">
+          <div class="fixed-name">Cuentas y Billeteras</div>
+          <div class="fixed-amount" style="font-family:'DM Sans',sans-serif;font-size:11px">Ahorros, efectivo, nequi...</div>
+        </div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16" style="color:var(--text3);stroke-width:2"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -70,6 +80,75 @@
       </select>
     </div>
     <button class="btn-save" id="entity-crud-btn" onclick="saveEntity()">Guardar Entidad</button>
+  </div>
+</div>
+
+<!-- WALLET LIST MODAL -->
+<div class="modal-overlay" id="wallet-list-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Cuentas y Billeteras</div>
+      <button class="modal-close" onclick="closeWalletListModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <button class="btn-outline" style="width:100%;margin-bottom:14px" onclick="openWalletCrudModal(null)">+ Nueva Cuenta / Billetera</button>
+    <div class="card" style="padding:0 14px"><div id="wallets-crud-list"></div></div>
+    
+    <div class="section-title" style="margin-top:20px;font-size:12px">Archivadas</div>
+    <div class="card" style="padding:0 14px;opacity:0.6"><div id="wallets-archived-list"></div></div>
+  </div>
+</div>
+
+<!-- WALLET CRUD MODAL -->
+<div class="modal-overlay" id="wallet-crud-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="wallet-crud-title">Nueva Cuenta</div>
+      <button class="modal-close" onclick="closeWalletCrudModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="form-group"><label>Nombre</label><input type="text" id="w-name" placeholder="ej. Ahorros, Nequi, Billetera"></div>
+    <div class="form-group">
+      <label>Tipo</label>
+      <select id="w-type">
+        <option value="banco">Cuenta Bancaria</option>
+        <option value="efectivo">Efectivo / Físico</option>
+        <option value="bolsillo">Bolsillo / Meta</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Color</label>
+      <div style="display:flex;gap:10px;margin-top:8px" id="w-color-selector">
+        <div class="color-dot w-color active" data-color="var(--blue)" style="background:var(--blue);width:24px;height:24px;cursor:pointer" onclick="selectWalletColor('var(--blue)')"></div>
+        <div class="color-dot w-color" data-color="var(--pink)" style="background:var(--pink);width:24px;height:24px;cursor:pointer" onclick="selectWalletColor('var(--pink)')"></div>
+        <div class="color-dot w-color" data-color="var(--gold)" style="background:var(--gold);width:24px;height:24px;cursor:pointer" onclick="selectWalletColor('var(--gold)')"></div>
+        <div class="color-dot w-color" data-color="var(--green)" style="background:var(--green);width:24px;height:24px;cursor:pointer" onclick="selectWalletColor('var(--green)')"></div>
+        <div class="color-dot w-color" data-color="var(--purple)" style="background:var(--purple);width:24px;height:24px;cursor:pointer" onclick="selectWalletColor('var(--purple)')"></div>
+        <div class="color-dot w-color" data-color="var(--orange)" style="background:var(--orange);width:24px;height:24px;cursor:pointer" onclick="selectWalletColor('var(--orange)')"></div>
+        <div class="color-dot w-color" data-color="var(--text1)" style="background:var(--text1);width:24px;height:24px;cursor:pointer" onclick="selectWalletColor('var(--text1)')"></div>
+      </div>
+    </div>
+    
+    <label style="display:flex;align-items:center;gap:10px;margin:20px 0;font-size:13px;cursor:pointer">
+      <input type="checkbox" id="w-default" style="width:20px;height:20px">
+      <span>Hacer de esta mi cuenta predeterminada</span>
+    </label>
+    
+    <button class="btn-save" id="wallet-crud-btn" onclick="saveWallet()">Guardar Cuenta</button>
+  </div>
+</div>
+
+<!-- WALLET ARCHIVE MODAL -->
+<div class="modal-overlay" id="wallet-archive-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Archivar Cuenta</div>
+      <button class="modal-close" onclick="closeWalletArchiveModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:20px">Esta cuenta tiene <strong id="wa-balance" style="color:var(--text1)">$0</strong>. Para archivarla, debes transferir sus fondos a otra cuenta activa.</div>
+    <div class="form-group">
+      <label>Transferir fondos a</label>
+      <select id="wa-dest"></select>
+    </div>
+    <button class="btn-save" onclick="processWalletArchive()">Transferir y Archivar</button>
   </div>
 </div>
 

@@ -22,7 +22,8 @@ var CAT_COLORS = {vivienda:'#378ADD',mercado:'#1D9E75',transporte:'#BA7517',salu
 var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
 // Estado en memoria
-var state = {transactions:[],goals:[],accounts:{},fixedExpenses:[],entities:[],debts:[],instruments:[]};
+var state = {transactions:[],goals:[],accounts:{},wallets:[],fixedExpenses:[],entities:[],debts:[],instruments:[]};
+var defaultWalletId = null;
 var txnType = 'ingreso';
 var editType = 'ingreso';
 var editingId = null;
@@ -37,16 +38,20 @@ var editingDebtId = null;
 var payingDebtId = null;
 var editingInstId = null;
 var payingInstId = null;
+var editingWalletId = null;
+var archivingWalletId = null;
+var selectedWalletColor = "var(--blue)";
 
 function updateWalletSelects() {
+  var activeWs = state.wallets.filter(w => w.status !== 'archived');
   var wHtml = '';
-  Object.keys(state.accounts).forEach(k => {
-    wHtml += '<option value="w_'+k+'">'+(ACC_LABELS[k]||k)+'</option>';
+  activeWs.forEach(w => {
+    wHtml += '<option value="w_'+w.id+'">'+w.name+'</option>';
   });
   
   var wOnlyHtml = '';
-  Object.keys(state.accounts).forEach(k => {
-    wOnlyHtml += '<option value="'+k+'">'+(ACC_LABELS[k]||k)+'</option>';
+  activeWs.forEach(w => {
+    wOnlyHtml += '<option value="'+w.id+'">'+w.name+'</option>';
   });
 
   var bothHtml = '<optgroup label="Cuentas (Dinero)">' + wHtml + '</optgroup>';
@@ -60,12 +65,20 @@ function updateWalletSelects() {
 
   ['f-cuenta', 'e-cuenta', 'fx-wallet'].forEach(id => {
     var el = document.getElementById(id);
-    if(el) { var v = el.value; el.innerHTML = bothHtml; if(v) el.value = v; }
+    if(el) { 
+       var v = el.value || (defaultWalletId ? 'w_'+defaultWalletId : ''); 
+       el.innerHTML = bothHtml; 
+       if(v) el.value = v; 
+    }
   });
 
   ['f-destino', 'e-destino', 'dp-wallet', 'ip-wallet'].forEach(id => {
     var el = document.getElementById(id);
-    if(el) { var v = el.value; el.innerHTML = wOnlyHtml; if(v) el.value = v; }
+    if(el) { 
+       var v = el.value; 
+       el.innerHTML = wOnlyHtml; 
+       if(v) el.value = v; 
+    }
   });
   
   var filterHtml = '<option value="">Todas las cuentas</option>' + bothHtml;
@@ -76,11 +89,9 @@ function updateWalletSelects() {
 function renderWalletsRow() {
   var el = document.getElementById('wallets-row');
   if(!el) return;
-  var colors = {milo:'var(--blue)', sari:'var(--pink)', cash:'var(--gold)'};
-  var html = Object.keys(state.accounts).map(k => {
-    var col = colors[k] || 'var(--text1)';
-    var bal = state.accounts[k] || 0;
-    return '<div class="acc-chip"><div class="acc-dot" style="background:'+col+'"></div><span class="acc-chip-label">'+(ACC_LABELS[k]||k)+'</span><span class="acc-chip-val" style="color:'+col+'">'+fmt(bal)+'</span></div>';
+  var activeWs = state.wallets.filter(w => w.status !== 'archived');
+  var html = activeWs.map(w => {
+    return '<div class="acc-chip"><div class="acc-dot" style="background:'+w.color+'"></div><span class="acc-chip-label">'+w.name+'</span><span class="acc-chip-val" style="color:'+w.color+'">'+fmt(w.balance)+'</span></div>';
   }).join('');
   el.innerHTML = html;
 }
@@ -276,9 +287,57 @@ function startListeners() {
 
   wsRef.collection("wallets").onSnapshot(snap => {
     state.accounts = {};
-    snap.forEach(doc => { state.accounts[doc.id] = doc.data().balance; });
+    state.wallets = [];
+    snap.forEach(doc => { 
+      let d = doc.data();
+      state.accounts[doc.id] = d.balance || 0;
+      
+      // Fallback para wallets legacy
+      let wName = d.name;
+      let wColor = d.color;
+      let wType = d.type;
+      
+      if(!wName) {
+         if(doc.id === 'milo') wName = 'Milo';
+         else if(doc.id === 'sari') wName = 'Sari';
+         else if(doc.id === 'cash') wName = 'Efectivo';
+         else wName = doc.id;
+      }
+      if(!wColor) {
+         if(doc.id === 'milo') wColor = 'var(--blue)';
+         else if(doc.id === 'sari') wColor = 'var(--pink)';
+         else if(doc.id === 'cash') wColor = 'var(--gold)';
+         else wColor = 'var(--text1)';
+      }
+      if(!wType) {
+         if(doc.id === 'cash') wType = 'efectivo';
+         else wType = 'banco';
+      }
+      
+      let wStatus = d.status || 'active';
+      let wDefault = d.isDefault || false;
+      if(wDefault && wStatus === 'active') defaultWalletId = doc.id;
+      
+      state.wallets.push({
+        id: doc.id,
+        name: wName,
+        color: wColor,
+        type: wType,
+        balance: d.balance || 0,
+        status: wStatus,
+        isDefault: wDefault
+      });
+    });
+    
+    // Si no hay default y hay activas, asignamos la primera
+    if(!defaultWalletId) {
+      let activeWs = state.wallets.filter(w => w.status !== 'archived');
+      if(activeWs.length > 0) defaultWalletId = activeWs[0].id;
+    }
+    
     renderWalletsRow();
     updateWalletSelects();
+    renderWalletsList();
     renderAll();
   });
   
@@ -350,7 +409,170 @@ function startListeners() {
     renderInstruments();
   });
 
+
+// ── GESTIÓN DE WALLETS ──
+function openWalletListModal() { 
+  closeConfigModal();
+  renderWalletsList();
+  document.getElementById('wallet-list-modal').classList.add('open'); 
+}
+function closeWalletListModal() { document.getElementById('wallet-list-modal').classList.remove('open'); }
+
+function renderWalletsList() {
+  var crudEl = document.getElementById('wallets-crud-list');
+  var archEl = document.getElementById('wallets-archived-list');
+  if(!crudEl || !archEl) return;
+  
+  var activeWs = state.wallets.filter(w => w.status !== 'archived');
+  var archivedWs = state.wallets.filter(w => w.status === 'archived');
+  
+  crudEl.innerHTML = activeWs.map(w => {
+    var isDef = w.isDefault ? '<span class="badge badge-milo" style="margin-left:8px;font-size:10px">Default</span>' : '';
+    return '<div class="fixed-item">'+
+      '<div class="fixed-info"><div class="fixed-name"><div class="acc-dot" style="background:'+w.color+';display:inline-block;margin-right:6px"></div>'+w.name+isDef+'</div><div class="fixed-amount" style="font-size:12px;font-weight:400;color:var(--text3)">Saldo: '+fmt(w.balance)+'</div></div>'+
+      '<div class="fixed-actions">'+
+        '<button class="icon-btn edit" onclick="openWalletCrudModal(\''+w.id+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'+
+        '<button class="icon-btn del" onclick="openWalletArchiveModal(\''+w.id+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button>'+
+      '</div></div>';
+  }).join('');
+  
+  archEl.innerHTML = archivedWs.length ? archivedWs.map(w => {
+    return '<div class="fixed-item">'+
+      '<div class="fixed-info"><div class="fixed-name">'+w.name+'</div><div class="fixed-amount" style="font-size:12px;font-weight:400;color:var(--text3)">Archivada</div></div>'+
+      '</div>';
+  }).join('') : '<div class="empty">No hay cuentas archivadas</div>';
+}
+
+function openWalletCrudModal(id) {
+  editingWalletId = id;
+  if(id) {
+    var w = state.wallets.find(x => x.id === id);
+    if(w) {
+      document.getElementById('w-name').value = w.name;
+      document.getElementById('w-type').value = w.type;
+      document.getElementById('w-default').checked = w.isDefault;
+      selectWalletColor(w.color);
+      document.getElementById('wallet-crud-title').textContent = 'Editar Cuenta';
+    }
+  } else {
+    document.getElementById('w-name').value = '';
+    document.getElementById('w-type').value = 'banco';
+    document.getElementById('w-default').checked = false;
+    selectWalletColor('var(--blue)');
+    document.getElementById('wallet-crud-title').textContent = 'Nueva Cuenta';
+  }
+  document.getElementById('wallet-crud-modal').classList.add('open');
+}
+function closeWalletCrudModal() { document.getElementById('wallet-crud-modal').classList.remove('open'); editingWalletId = null; }
+
+function selectWalletColor(c) {
+  selectedWalletColor = c;
+  document.querySelectorAll('.w-color').forEach(el => {
+    if(el.dataset.color === c) el.classList.add('active');
+    else el.classList.remove('active');
+  });
+}
+
+function saveWallet() {
+  var name = document.getElementById('w-name').value.trim();
+  var type = document.getElementById('w-type').value;
+  var isDefault = document.getElementById('w-default').checked;
+  
+  if(!name) { alert('Ingresa el nombre'); return; }
+  
+  var wRef;
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  if(isDefault) {
+    // Quitar default a las demas
+    state.wallets.forEach(w => {
+      if(w.isDefault && w.id !== editingWalletId) {
+         batch.update(wsRef.collection("wallets").doc(w.id), { isDefault: false });
+      }
+    });
+  }
+
+  if(editingWalletId) {
+    wRef = wsRef.collection("wallets").doc(editingWalletId);
+    batch.update(wRef, { 
+      name: name, type: type, color: selectedWalletColor, isDefault: isDefault, updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
+    });
+  } else {
+    wRef = wsRef.collection("wallets").doc('w_' + Date.now());
+    batch.set(wRef, { 
+      name: name, type: type, color: selectedWalletColor, balance: 0, status: 'active', isDefault: isDefault, createdAt: firebase.firestore.FieldValue.serverTimestamp() 
+    });
+  }
+  
+  batch.commit().then(() => { closeWalletCrudModal(); toast('✓ Cuenta guardada'); }).catch(e => toast('⚠️ Error: ' + e.message));
+}
+
+function openWalletArchiveModal(id) {
+  var w = state.wallets.find(x => x.id === id);
+  if(!w) return;
+  var activeWs = state.wallets.filter(x => x.status !== 'archived');
+  if(activeWs.length <= 1) {
+     alert('No puedes archivar la única cuenta activa.');
+     return;
+  }
+  
+  archivingWalletId = id;
+  
+  if(w.balance > 0) {
+    document.getElementById('wa-balance').textContent = fmt(w.balance);
+    var dHtml = '';
+    activeWs.forEach(aw => {
+       if(aw.id !== id) dHtml += '<option value="'+aw.id+'">'+aw.name+'</option>';
+    });
+    document.getElementById('wa-dest').innerHTML = dHtml;
+    document.getElementById('wallet-archive-modal').classList.add('open');
+  } else {
+    if(confirm('¿Archivar cuenta ' + w.name + '? Ya no aparecerá en los selects.')) {
+      db.collection("workspaces").doc(WORKSPACE_ID).collection("wallets").doc(id).update({
+        status: 'archived', isDefault: false, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }).then(() => toast('✓ Cuenta archivada'));
+    }
+  }
+}
+
+function closeWalletArchiveModal() { document.getElementById('wallet-archive-modal').classList.remove('open'); archivingWalletId = null; }
+
+function processWalletArchive() {
+  if(!archivingWalletId) return;
+  var dest = document.getElementById('wa-dest').value;
+  var w = state.wallets.find(x => x.id === archivingWalletId);
+  if(!dest || !w) return;
+  
+  var txnId = String(Date.now());
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  var tRef = wsRef.collection("transactions").doc(txnId);
+  batch.set(tRef, {
+      type: 'transferencia', amount: w.balance, description: 'Cierre de cuenta ' + w.name, date: todayStr(),
+      walletId: w.id, destinationWalletId: dest,
+      categoryId: null, entityId: null,
+      status: "completed", origin: "system",
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
+  });
+  
+  batch.update(wsRef.collection("wallets").doc(w.id), { 
+      balance: 0, status: 'archived', isDefault: false, updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
+  });
+  batch.update(wsRef.collection("wallets").doc(dest), { 
+      balance: firebase.firestore.FieldValue.increment(w.balance), updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
+  });
+  
+  syncStatus('saving');
+  batch.commit().then(() => {
+    syncStatus('ok'); toast('✓ Cuenta archivada y fondos transferidos');
+    closeWalletArchiveModal();
+  }).catch(e => { syncStatus('err'); toast('⚠️ ' + e.message); });
+}
+
 // ── CONFIG Y ENTIDADES ──
+
 function openConfigModal() { document.getElementById('config-modal').classList.add('open'); }
 function closeConfigModal() { document.getElementById('config-modal').classList.remove('open'); }
 
@@ -528,7 +750,7 @@ function saveTransaction() {
   isSaving = true; syncStatus('saving');
   batch.commit().then(() => {
     isSaving = false; syncStatus('ok'); toast('✓ Guardado y sincronizado');
-    document.getElementById('f-desc').value=''; document.getElementById('f-amount').value='';
+    document.getElementById('f-desc').value=''; document.getElementById('f-amount').value=''; updateWalletSelects();
     document.getElementById('f-amount-fmt').textContent=''; document.getElementById('f-entidad').value=''; setDate();
   }).catch(err => {
     isSaving = false; syncStatus('err'); toast('⚠️ '+err.message);
@@ -1084,7 +1306,8 @@ function txnHTML(t,showEdit) {
   var cls=isIng?'ing':(isTr||isCc)?'tr':'eg';
   var icon=isIng?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14"/><path d="M5 12l7 7 7-7"/></svg>':(isTr||isCc)?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 16l-4-4 4-4"/><path d="M17 8l4 4-4 4"/><line x1="3" y1="12" x2="21" y2="12"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
   
-  var accStr = t.cuenta ? (ACC_LABELS[t.cuenta]||t.cuenta) : 'N/A';
+  var wObj = state.wallets ? state.wallets.find(x => x.id === t.cuenta) : null;
+  var accStr = t.cuenta ? (wObj ? wObj.name : t.cuenta) : 'N/A';
   if(t.instrumentId && t.type !== 'cc_payment') {
      var instObj = state.instruments ? state.instruments.find(x => x.id == t.instrumentId) : null;
      accStr = instObj ? instObj.name : 'Tarjeta';
@@ -1092,7 +1315,7 @@ function txnHTML(t,showEdit) {
   var accB='<span class="badge badge-milo">'+accStr+'</span>';
   
   var dstB='';
-  if(isTr&&t.destino) dstB=' → <span class="badge badge-'+t.destino+'">'+(ACC_LABELS[t.destino]||t.destino)+'</span>';
+  if(isTr&&t.destino) { var dObj = state.wallets ? state.wallets.find(x => x.id === t.destino) : null; dstB=' → <span class="badge badge-'+t.destino+'">'+(dObj?dObj.name:t.destino)+'</span>'; }
   if(isCc&&t.instrumentId) {
      var destObj = state.instruments ? state.instruments.find(x => x.id == t.instrumentId) : null;
      dstB=' → <span class="badge badge-milo">'+(destObj ? destObj.name : 'Tarjeta')+'</span>';
