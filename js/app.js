@@ -22,7 +22,7 @@ var CAT_COLORS = {vivienda:'#378ADD',mercado:'#1D9E75',transporte:'#BA7517',salu
 var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
 // Estado en memoria
-var state = {transactions:[],goals:[],accounts:{},wallets:[],fixedExpenses:[],entities:[],debts:[],instruments:[]};
+var state = {transactions:[],goals:[],accounts:{},wallets:[],categories:[],fixedExpenses:[],entities:[],debts:[],instruments:[]};
 
 state.activePeriod = { month: new Date().getMonth(), year: new Date().getFullYear() };
 
@@ -80,6 +80,9 @@ var payingInstId = null;
 var editingWalletId = null;
 var archivingWalletId = null;
 var selectedWalletColor = "var(--blue)";
+var editingCategoryId = null;
+var selectedCategoryColor = "var(--blue)";
+var currentCategoryListType = "egreso";
 
 function updateWalletSelects() {
   var activeWs = state.wallets.filter(w => w.status !== 'archived');
@@ -393,6 +396,36 @@ function startListeners() {
     renderWalletsList();
     renderAll();
   });
+
+  wsRef.collection("categories").onSnapshot(snap => {
+    state.categories = [];
+    if(snap.empty) {
+      // Seed categories (Fallback mapping as defaults)
+      var batch = db.batch();
+      var count = 0;
+      Object.keys(LEGACY_CATEGORIES).forEach(k => {
+         var lg = LEGACY_CATEGORIES[k];
+         var ref = wsRef.collection("categories").doc(k);
+         batch.set(ref, {
+           name: lg.name, icon: lg.icon, color: lg.color, type: (k==='salario'||k==='ingresos' ? 'ingreso' : 'egreso'),
+           group: '', status: 'active', createdAt: firebase.firestore.FieldValue.serverTimestamp()
+         });
+         count++;
+      });
+      if(count > 0) batch.commit().then(() => console.log('Categorías por defecto creadas'));
+    } else {
+      snap.forEach(doc => {
+        var d = doc.data();
+        state.categories.push({ id: doc.id, name: d.name, icon: d.icon, color: d.color, type: d.type, group: d.group, status: d.status || 'active' });
+      });
+    }
+    updateCategorySelects();
+    if(document.getElementById('category-list-modal').classList.contains('open')) {
+       renderCategoryList(currentCategoryListType);
+    }
+    renderAll();
+  });
+
   
   wsRef.collection("transactions").orderBy("date", "desc").onSnapshot(snap => {
     let txns = [];
@@ -624,6 +657,156 @@ function processWalletArchive() {
   }).catch(e => { syncStatus('err'); toast('⚠️ ' + e.message); });
 }
 
+
+var LEGACY_CATEGORIES = {
+   'vivienda': { name: 'Vivienda', icon: '🏠', color: 'var(--blue)' },
+   'mercado': { name: 'Mercado', icon: '🛒', color: 'var(--green)' },
+   'transporte': { name: 'Transporte', icon: '🚗', color: 'var(--orange)' },
+   'salud': { name: 'Salud', icon: '❤️', color: 'var(--pink)' },
+   'educacion': { name: 'Educación', icon: '📚', color: 'var(--purple)' },
+   'entretenimiento': { name: 'Ocio', icon: '🎬', color: 'var(--gold)' },
+   'ropa': { name: 'Ropa', icon: '👕', color: 'var(--blue)' },
+   'servicios': { name: 'Servicios', icon: '💡', color: 'var(--gold)' },
+   'tecnologia': { name: 'Tecnología', icon: '💻', color: 'var(--text1)' },
+   'negocio': { name: 'Negocio', icon: '💼', color: 'var(--blue)' },
+   'ahorro': { name: 'Ahorro', icon: '💰', color: 'var(--green)' },
+   'tc': { name: 'Tarjeta Crédito', icon: '💳', color: 'var(--pink)' },
+   'otro': { name: 'Otro', icon: '📦', color: 'var(--text3)' },
+   'salario': { name: 'Salario', icon: '💵', color: 'var(--green)' },
+   'ingresos': { name: 'Ingresos', icon: '💵', color: 'var(--green)' }
+};
+
+function getCategoryMeta(id) {
+  if(!id) return { name: 'Sin clasificar', icon: '🏷️', color: 'var(--text3)' };
+  var c = state.categories.find(x => x.id === id);
+  if(c) return c;
+  var leg = LEGACY_CATEGORIES[id];
+  if(leg) return { id: id, name: leg.name, icon: leg.icon, color: leg.color, type: 'egreso', status: 'active' };
+  return { id: id, name: id, icon: '🏷️', color: 'var(--text3)', type: 'egreso', status: 'active' };
+}
+
+// ── CATEGORIES ──
+function updateCategorySelects() {
+  var active = state.categories.filter(c => c.status !== 'archived');
+  var ingHtml = active.filter(c => c.type === 'ingreso').map(c => '<option value="'+c.id+'">'+c.icon+' '+c.name+'</option>').join('');
+  var egHtml = active.filter(c => c.type === 'egreso').map(c => '<option value="'+c.id+'">'+c.icon+' '+c.name+'</option>').join('');
+  
+  if(!ingHtml) ingHtml = '<option value="">Sin categorías</option>';
+  if(!egHtml) egHtml = '<option value="">Sin categorías</option>';
+  
+  var fc = document.getElementById('f-cat');
+  if(fc) fc.innerHTML = txnType === 'ingreso' ? ingHtml : egHtml;
+  
+  var ec = document.getElementById('e-cat');
+  if(ec) ec.innerHTML = editType === 'ingreso' ? ingHtml : egHtml;
+  
+  var fxc = document.getElementById('fx-cat');
+  if(fxc) fxc.innerHTML = egHtml;
+}
+
+function openCategoryListModal() {
+  closeConfigModal();
+  renderCategoryList('egreso');
+  document.getElementById('category-list-modal').classList.add('open');
+}
+function closeCategoryListModal() { document.getElementById('category-list-modal').classList.remove('open'); }
+
+function renderCategoryList(type) {
+  currentCategoryListType = type;
+  document.getElementById('cseg-egreso').classList.toggle('active', type === 'egreso');
+  document.getElementById('cseg-ingreso').classList.toggle('active', type === 'ingreso');
+  
+  var crudEl = document.getElementById('categories-crud-list');
+  var archEl = document.getElementById('categories-archived-list');
+  if(!crudEl || !archEl) return;
+  
+  var active = state.categories.filter(c => c.status !== 'archived' && c.type === type);
+  var archived = state.categories.filter(c => c.status === 'archived' && c.type === type);
+  
+  crudEl.innerHTML = active.map(c => {
+    return '<div class="fixed-item">'+
+      '<div class="fixed-info"><div class="fixed-name"><div class="acc-dot" style="background:'+c.color+';display:inline-block;margin-right:6px"></div>'+c.icon+' '+c.name+'</div><div class="fixed-amount" style="font-size:12px;font-weight:400;color:var(--text3)">'+(c.group||'Sin grupo')+'</div></div>'+
+      '<div class="fixed-actions">'+
+        '<button class="icon-btn edit" onclick="openCategoryCrudModal(\''+c.id+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'+
+        '<button class="icon-btn del" onclick="archiveCategory(\''+c.id+'\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button>'+
+      '</div></div>';
+  }).join('');
+  
+  archEl.innerHTML = archived.length ? archived.map(c => {
+    return '<div class="fixed-item">'+
+      '<div class="fixed-info"><div class="fixed-name">'+c.icon+' '+c.name+'</div><div class="fixed-amount" style="font-size:12px;font-weight:400;color:var(--text3)">Archivada</div></div>'+
+      '</div>';
+  }).join('') : '<div class="empty">No hay archivadas</div>';
+}
+
+function openCategoryCrudModal(id) {
+  editingCategoryId = id;
+  if(id) {
+    var c = state.categories.find(x => x.id === id);
+    if(c) {
+      document.getElementById('c-name').value = c.name;
+      document.getElementById('c-icon').value = c.icon;
+      document.getElementById('c-type').value = c.type;
+      document.getElementById('c-group').value = c.group || '';
+      selectCategoryColor(c.color);
+      document.getElementById('category-crud-title').textContent = 'Editar Categoría';
+    }
+  } else {
+    document.getElementById('c-name').value = '';
+    document.getElementById('c-icon').value = '📦';
+    document.getElementById('c-type').value = currentCategoryListType;
+    document.getElementById('c-group').value = '';
+    selectCategoryColor('var(--blue)');
+    document.getElementById('category-crud-title').textContent = 'Nueva Categoría';
+  }
+  document.getElementById('category-crud-modal').classList.add('open');
+}
+function closeCategoryCrudModal() { document.getElementById('category-crud-modal').classList.remove('open'); editingCategoryId = null; }
+
+function selectCategoryColor(c) {
+  selectedCategoryColor = c;
+  document.querySelectorAll('.c-color').forEach(el => {
+    if(el.dataset.color === c) el.classList.add('active');
+    else el.classList.remove('active');
+  });
+}
+
+function saveCategory() {
+  var name = document.getElementById('c-name').value.trim();
+  var icon = document.getElementById('c-icon').value.trim() || '🏷️';
+  var type = document.getElementById('c-type').value;
+  var group = document.getElementById('c-group').value;
+  
+  if(!name) { alert('Ingresa el nombre'); return; }
+  
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  if(editingCategoryId) {
+    var cRef = wsRef.collection("categories").doc(editingCategoryId);
+    batch.update(cRef, { 
+      name: name, icon: icon, type: type, group: group, color: selectedCategoryColor, updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
+    });
+  } else {
+    var cRef = wsRef.collection("categories").doc('c_' + Date.now());
+    batch.set(cRef, { 
+      name: name, icon: icon, type: type, group: group, color: selectedCategoryColor, status: 'active', createdAt: firebase.firestore.FieldValue.serverTimestamp() 
+    });
+  }
+  
+  batch.commit().then(() => { closeCategoryCrudModal(); toast('✓ Categoría guardada'); }).catch(e => toast('⚠️ Error: ' + e.message));
+}
+
+function archiveCategory(id) {
+  var c = state.categories.find(x => x.id === id);
+  if(!c) return;
+  if(confirm('¿Archivar la categoría ' + c.name + '? Ya no aparecerá en nuevos registros.')) {
+    db.collection("workspaces").doc(WORKSPACE_ID).collection("categories").doc(id).update({
+      status: 'archived', updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }).then(() => toast('✓ Categoría archivada'));
+  }
+}
+
 // ── CONFIG Y ENTIDADES ──
 
 function openConfigModal() { document.getElementById('config-modal').classList.add('open'); }
@@ -755,6 +938,7 @@ function setType(t) {
   } else {
     updateWalletSelects();
   }
+  updateCategorySelects();
 }
 
 // ── ATOMIC BATCH SAVES ──
@@ -838,6 +1022,7 @@ function setEditType(t) {
   document.getElementById('erow-cat').style.display=t==='transferencia'?'none':'block';
   document.getElementById('erow-destino').style.display=t==='transferencia'?'block':'none';
   document.getElementById('elabel-cuenta').textContent=t==='transferencia'?'Cuenta origen':'Cuenta';
+  updateCategorySelects();
 }
 
 function saveEdit() {

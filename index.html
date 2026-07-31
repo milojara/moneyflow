@@ -48,6 +48,17 @@
   </div>
 </div>
 
+
+    <div class="card" style="margin-top:14px;padding:0">
+      <div class="fixed-item" style="padding:14px;cursor:pointer" onclick="openCategoryListModal()">
+        <div class="fixed-info">
+          <div class="fixed-name">Categorías Dinámicas</div>
+          <div class="fixed-amount" style="font-family:'DM Sans',sans-serif;font-size:11px">Mercado, Vivienda, Transporte...</div>
+        </div>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="16" height="16" style="color:var(--text3);stroke-width:2"><path d="M9 18l6-6-6-6"/></svg>
+      </div>
+    </div>
+
 <!-- ENTITY LIST MODAL -->
 <div class="modal-overlay" id="entity-list-modal">
   <div class="modal">
@@ -152,6 +163,80 @@
   </div>
 </div>
 
+
+<!-- CATEGORY LIST MODAL -->
+<div class="modal-overlay" id="category-list-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Categorías</div>
+      <button class="modal-close" onclick="closeCategoryListModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="seg-control" style="margin-bottom:14px">
+      <button class="seg-btn active" id="cseg-egreso" onclick="renderCategoryList('egreso')">Egresos</button>
+      <button class="seg-btn" id="cseg-ingreso" onclick="renderCategoryList('ingreso')">Ingresos</button>
+    </div>
+    <button class="btn-outline" style="width:100%;margin-bottom:14px" onclick="openCategoryCrudModal(null)">+ Nueva Categoría</button>
+    <div class="card" style="padding:0 14px"><div id="categories-crud-list"></div></div>
+    
+    <div class="section-title" style="margin-top:20px;font-size:12px">Archivadas</div>
+    <div class="card" style="padding:0 14px;opacity:0.6"><div id="categories-archived-list"></div></div>
+  </div>
+</div>
+
+<!-- CATEGORY CRUD MODAL -->
+<div class="modal-overlay" id="category-crud-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="category-crud-title">Nueva Categoría</div>
+      <button class="modal-close" onclick="closeCategoryCrudModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="display:flex;gap:12px">
+      <div class="form-group" style="width:80px">
+        <label>Emoji</label>
+        <input type="text" id="c-icon" placeholder="🛒" style="text-align:center;font-size:20px">
+      </div>
+      <div class="form-group" style="flex:1">
+        <label>Nombre</label>
+        <input type="text" id="c-name" placeholder="ej. Mercado">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Tipo</label>
+      <select id="c-type">
+        <option value="egreso">Egreso (Gasto)</option>
+        <option value="ingreso">Ingreso</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Grupo (Opcional)</label>
+      <select id="c-group">
+        <option value="">Ninguno</option>
+        <option value="hogar">Hogar</option>
+        <option value="transporte">Transporte</option>
+        <option value="salud">Salud</option>
+        <option value="educacion">Educación</option>
+        <option value="finanzas">Finanzas / Ahorro</option>
+        <option value="ocio">Ocio / Entretenimiento</option>
+        <option value="personal">Personal</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Color</label>
+      <div style="display:flex;gap:10px;margin-top:8px" id="c-color-selector">
+        <div class="color-dot c-color active" data-color="var(--blue)" style="background:var(--blue);width:24px;height:24px;cursor:pointer" onclick="selectCategoryColor('var(--blue)')"></div>
+        <div class="color-dot c-color" data-color="var(--pink)" style="background:var(--pink);width:24px;height:24px;cursor:pointer" onclick="selectCategoryColor('var(--pink)')"></div>
+        <div class="color-dot c-color" data-color="var(--gold)" style="background:var(--gold);width:24px;height:24px;cursor:pointer" onclick="selectCategoryColor('var(--gold)')"></div>
+        <div class="color-dot c-color" data-color="var(--green)" style="background:var(--green);width:24px;height:24px;cursor:pointer" onclick="selectCategoryColor('var(--green)')"></div>
+        <div class="color-dot c-color" data-color="var(--purple)" style="background:var(--purple);width:24px;height:24px;cursor:pointer" onclick="selectCategoryColor('var(--purple)')"></div>
+        <div class="color-dot c-color" data-color="var(--orange)" style="background:var(--orange);width:24px;height:24px;cursor:pointer" onclick="selectCategoryColor('var(--orange)')"></div>
+        <div class="color-dot c-color" data-color="var(--text1)" style="background:var(--text1);width:24px;height:24px;cursor:pointer" onclick="selectCategoryColor('var(--text1)')"></div>
+      </div>
+    </div>
+    
+    <button class="btn-save" id="category-crud-btn" onclick="saveCategory()">Guardar Categoría</button>
+  </div>
+</div>
+
 <!-- EDIT MODAL -->
 <div class="modal-overlay" id="edit-modal">
   <div class="modal">
@@ -187,20 +272,7 @@
     </div>
     <div class="form-group" id="erow-cat">
       <label>Categoría</label>
-      <select id="e-cat">
-        <option value="vivienda">🏠 Vivienda / Arriendo</option>
-        <option value="mercado">🛒 Mercado / Alimentos</option>
-        <option value="transporte">🚗 Transporte</option>
-        <option value="salud">❤️ Salud</option>
-        <option value="educacion">📚 Educación</option>
-        <option value="entretenimiento">🎬 Entretenimiento</option>
-        <option value="ropa">👕 Ropa y calzado</option>
-        <option value="servicios">💡 Servicios públicos</option>
-        <option value="tecnologia">💻 Tecnología</option>
-        <option value="negocio">🎥 Click and Roll</option>
-        <option value="ahorro">💰 Ahorro</option>
-        <option value="otro">📦 Otro</option>
-      </select>
+      <select id="e-cat"></select>
     </div>
     <div class="form-group"><label>Fecha</label><input type="date" id="e-date"></div>
     <button class="btn-save" onclick="saveEdit()">Guardar cambios</button>
@@ -240,17 +312,7 @@
     </div>
     <div class="form-group">
       <label>Categoría</label>
-      <select id="fx-cat">
-        <option value="vivienda">🏠 Vivienda / Arriendo</option>
-        <option value="salud">❤️ Salud / Seguros</option>
-        <option value="servicios">💡 Servicios públicos</option>
-        <option value="transporte">🚗 Transporte / Seguro carro</option>
-        <option value="educacion">📚 Educación</option>
-        <option value="tecnologia">💻 Tecnología / Suscripciones</option>
-        <option value="tc">💳 Tarjeta de crédito</option>
-        <option value="negocio">🎥 Click and Roll</option>
-        <option value="otro">📦 Otro</option>
-      </select>
+      <select id="fx-cat"></select>
     </div>
     <button class="btn-save" id="fixed-modal-btn" onclick="saveFixedItem()">Agregar gasto fijo</button>
   </div>
@@ -432,20 +494,7 @@
     </div>
     <div class="form-group" id="row-cat">
       <label>Categoría</label>
-      <select id="f-cat">
-        <option value="vivienda">🏠 Vivienda / Arriendo</option>
-        <option value="mercado">🛒 Mercado / Alimentos</option>
-        <option value="transporte">🚗 Transporte</option>
-        <option value="salud">❤️ Salud</option>
-        <option value="educacion">📚 Educación</option>
-        <option value="entretenimiento">🎬 Entretenimiento</option>
-        <option value="ropa">👕 Ropa y calzado</option>
-        <option value="servicios">💡 Servicios públicos</option>
-        <option value="tecnologia">💻 Tecnología</option>
-        <option value="negocio">🎥 Click and Roll</option>
-        <option value="ahorro">💰 Ahorro</option>
-        <option value="otro">📦 Otro</option>
-      </select>
+      <select id="f-cat"></select>
     </div>
     <div class="form-group"><label>Fecha</label><input type="date" id="f-date"></div>
     <button class="btn-save" onclick="saveTransaction()">Guardar movimiento</button>
