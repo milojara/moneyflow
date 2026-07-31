@@ -271,13 +271,13 @@ async function migrateToV1() {
     const backupRef = db.collection("backups_migracion").doc("estado_backup_" + Date.now());
     await backupRef.set(oldData);
     
-    const batch = db.batch();
+    let allOps = [];
     const wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
     
-    batch.set(wsRef, {
+    allOps.push({ type: 'set', ref: wsRef, data: {
       name: "Finanzas Familia", ownerId: DEV_USER_ID, members: [DEV_USER_ID],
       createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    });
+    }});
     
     const accounts = oldData.accounts || {milo:0, sari:0, cash:0};
     const wallets = [
@@ -286,40 +286,50 @@ async function migrateToV1() {
       { id: "cash", name: "Caja fuerte", type: "efectivo", balance: accounts.cash||0, currency: "COP", status: "active", ownershipType: "shared", visibility: "shared", ownerId: "Compartido" }
     ];
     wallets.forEach(w => {
-      batch.set(wsRef.collection("wallets").doc(w.id), { ...w, createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: DEV_USER_ID });
+      allOps.push({ type: 'set', ref: wsRef.collection("wallets").doc(w.id), data: { ...w, createdAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: DEV_USER_ID } });
     });
     
     const txns = oldData.transactions || [];
     txns.forEach(t => {
-      batch.set(wsRef.collection("transactions").doc(String(t.id)), {
+      allOps.push({ type: 'set', ref: wsRef.collection("transactions").doc(String(t.id)), data: {
         type: t.type, amount: t.amount, description: t.desc, date: t.date,
         walletId: t.cuenta, destinationWalletId: t.destino || null, categoryId: t.cat || 'otro',
         status: "completed", origin: "migration", createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      }});
     });
     
     const goals = oldData.goals || [];
     goals.forEach(g => {
-      batch.set(wsRef.collection("goals").doc(String(g.id)), {
+      allOps.push({ type: 'set', ref: wsRef.collection("goals").doc(String(g.id)), data: {
         name: g.name, target: g.target, saved: g.saved, status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      }});
     });
     
     const fixedEx = oldData.fixedExpenses || [];
     fixedEx.forEach(f => {
-      batch.set(wsRef.collection("fixed_expenses").doc(String(f.id)), {
+      allOps.push({ type: 'set', ref: wsRef.collection("fixed_expenses").doc(String(f.id)), data: {
         name: f.name, amount: f.amount, categoryId: f.cat || 'otro', walletId: "milo",
         dueDay: 28, status: "active",
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
-      });
+      }});
     });
     
-    batch.update(oldDocRef, { migrated_to_v1: true });
-    await batch.commit();
+    allOps.push({ type: 'update', ref: oldDocRef, data: { migrated_to_v1: true } });
+    
+    // Chunk in batches of 450 to avoid Firestore limits
+    for (let i = 0; i < allOps.length; i += 450) {
+      let chunk = allOps.slice(i, i + 450);
+      let batch = db.batch();
+      chunk.forEach(op => {
+         if (op.type === 'set') batch.set(op.ref, op.data);
+         if (op.type === 'update') batch.update(op.ref, op.data);
+      });
+      await batch.commit();
+    }
     return true;
   } catch (error) {
     console.error("Error en migración:", error);
-    alert("Error crítico migrando datos. Revisa la consola.");
+    alert("Error crítico migrando datos: " + error.message);
     return false;
   }
 }
