@@ -22,7 +22,7 @@ var CAT_COLORS = {vivienda:'#378ADD',mercado:'#1D9E75',transporte:'#BA7517',salu
 var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
 // Estado en memoria
-var state = {transactions:[],goals:[],accounts:{milo:0,sari:0,cash:0},fixedExpenses:[],entities:[],debts:[]};
+var state = {transactions:[],goals:[],accounts:{},fixedExpenses:[],entities:[],debts:[],instruments:[]};
 var txnType = 'ingreso';
 var editType = 'ingreso';
 var editingId = null;
@@ -35,10 +35,99 @@ var editingEntityId = null;
 var debtType = 'to_pay';
 var editingDebtId = null;
 var payingDebtId = null;
+var editingInstId = null;
+var payingInstId = null;
+
+function updateWalletSelects() {
+  var wHtml = '';
+  Object.keys(state.accounts).forEach(k => {
+    wHtml += '<option value="w_'+k+'">'+(ACC_LABELS[k]||k)+'</option>';
+  });
+  
+  var wOnlyHtml = '';
+  Object.keys(state.accounts).forEach(k => {
+    wOnlyHtml += '<option value="'+k+'">'+(ACC_LABELS[k]||k)+'</option>';
+  });
+
+  var bothHtml = '<optgroup label="Cuentas (Dinero)">' + wHtml + '</optgroup>';
+  if(state.instruments && state.instruments.length > 0) {
+    bothHtml += '<optgroup label="Tarjetas de Crédito">';
+    state.instruments.forEach(i => {
+      bothHtml += '<option value="i_'+i.id+'">'+i.name+'</option>';
+    });
+    bothHtml += '</optgroup>';
+  }
+
+  ['f-cuenta', 'e-cuenta', 'fx-wallet'].forEach(id => {
+    var el = document.getElementById(id);
+    if(el) { var v = el.value; el.innerHTML = bothHtml; if(v) el.value = v; }
+  });
+
+  ['f-destino', 'e-destino', 'dp-wallet', 'ip-wallet'].forEach(id => {
+    var el = document.getElementById(id);
+    if(el) { var v = el.value; el.innerHTML = wOnlyHtml; if(v) el.value = v; }
+  });
+  
+  var filterHtml = '<option value="">Todas las cuentas</option>' + bothHtml;
+  var filterEl = document.getElementById('filter-acc');
+  if(filterEl) { var v = filterEl.value; filterEl.innerHTML = filterHtml; if(v) filterEl.value = v; }
+}
+
+function renderWalletsRow() {
+  var el = document.getElementById('wallets-row');
+  if(!el) return;
+  var colors = {milo:'var(--blue)', sari:'var(--pink)', cash:'var(--gold)'};
+  var html = Object.keys(state.accounts).map(k => {
+    var col = colors[k] || 'var(--text1)';
+    var bal = state.accounts[k] || 0;
+    return '<div class="acc-chip"><div class="acc-dot" style="background:'+col+'"></div><span class="acc-chip-label">'+(ACC_LABELS[k]||k)+'</span><span class="acc-chip-val" style="color:'+col+'">'+fmt(bal)+'</span></div>';
+  }).join('');
+  el.innerHTML = html;
+}
+
+function renderInstruments() {
+  var el = document.getElementById('instruments-list');
+  if(!el) return;
+  if(!state.instruments || state.instruments.length === 0) {
+    el.innerHTML = '<div class="empty">No tienes tarjetas agregadas</div>';
+    return;
+  }
+  
+  el.innerHTML = state.instruments.map(i => {
+    var spent = state.transactions.filter(t => t.type === 'egreso' && String(t.instrumentId) === String(i.id)).reduce((a,t)=>a+t.amount,0);
+    var paid = state.transactions.filter(t => t.type === 'cc_payment' && String(t.instrumentId) === String(i.id)).reduce((a,t)=>a+t.amount,0);
+    var deuda = spent - paid;
+    if(deuda < 0) deuda = 0;
+    
+    var disp = i.creditLimit - deuda;
+    var pct = i.creditLimit > 0 ? Math.min(Math.round((deuda / i.creditLimit)*100), 100) : 0;
+    
+    var entObj = i.entityId ? state.entities.find(e => e.id === i.entityId) : null;
+    var entStr = entObj ? entObj.name : '';
+    
+    return '<div class="goal-card" style="margin-bottom:10px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:start">'+
+        '<div>'+
+          '<div style="margin-bottom:4px"><span class="badge-status badge-pending">Crédito</span></div>'+
+          '<div class="goal-name">'+i.name+'</div>'+
+          '<div class="goal-sub">'+entStr+'</div>'+
+        '</div>'+
+        '<div style="display:flex;align-items:start">'+
+          '<button class="btn-outline" style="font-size:11px;padding:5px 10px;border-radius:6px;margin-right:6px" onclick="openInstPayModal(\\''+i.id+'\\')">Pagar</button>'+
+          '<button class="icon-btn edit" onclick="openInstModal(\\''+i.id+'\\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>'+
+          '<button class="icon-btn del" onclick="deleteInst(\\''+i.id+'\\')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button>'+
+        '</div>'+
+      '</div>'+
+      '<div class="goal-bar-bg" style="margin-top:12px"><div class="goal-bar-fill" style="width:'+pct+'%;background:var(--red)"></div></div>'+
+      '<div class="goal-footer"><span>Utilizado: <strong style="color:var(--red)">'+fmt(deuda)+'</strong></span><strong>'+pct+'%</strong><span>Disponible: <strong>'+fmt(disp)+'</strong></span></div>'+
+      '<div style="font-size:11px;color:var(--text3);margin-top:8px;text-align:right">Cupo total: '+fmt(i.creditLimit)+'</div>'+
+    '</div>';
+  }).join('');
+}
 
 // ── AMOUNT FORMATTING ──
 function formatAmountInput(input, fmtId) {
-  var raw = input.value.replace(/\D/g,'');
+  var raw = input.value.replace(/\\D/g,'');
   if (raw.length > 12) raw = raw.slice(0,12);
   input.value = raw;
   var fmtEl = document.getElementById(fmtId);
@@ -186,8 +275,10 @@ function startListeners() {
   });
 
   wsRef.collection("wallets").onSnapshot(snap => {
-    state.accounts = {milo:0, sari:0, cash:0};
+    state.accounts = {};
     snap.forEach(doc => { state.accounts[doc.id] = doc.data().balance; });
+    renderWalletsRow();
+    updateWalletSelects();
     renderAll();
   });
   
@@ -197,7 +288,7 @@ function startListeners() {
       const d = doc.data();
       txns.push({
         id: parseInt(doc.id), type: d.type, desc: d.description, amount: d.amount,
-        cuenta: d.walletId, destino: d.destinationWalletId, cat: d.categoryId, date: d.date,
+        cuenta: d.walletId, instrumentId: d.instrumentId || null, destino: d.destinationWalletId, cat: d.categoryId, date: d.date,
         entityId: d.entityId || null,
         origin: d.origin || null, commitmentId: d.commitmentId || null
       });
@@ -247,6 +338,17 @@ function startListeners() {
     renderDebts();
   });
 }
+
+  wsRef.collection("instruments").onSnapshot(snap => {
+    let iArr = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      iArr.push({ id: doc.id, name: d.name, type: d.type, creditLimit: d.creditLimit, entityId: d.entityId || null });
+    });
+    state.instruments = iArr;
+    updateWalletSelects();
+    renderInstruments();
+  });
 
 // ── CONFIG Y ENTIDADES ──
 function openConfigModal() { document.getElementById('config-modal').classList.add('open'); }
@@ -368,19 +470,31 @@ function setType(t) {
   document.getElementById('seg-'+{ingreso:'ing',egreso:'eg',transferencia:'tr'}[t]).classList.add('active');
   document.getElementById('row-cat').style.display=t==='transferencia'?'none':'block';
   document.getElementById('row-destino').style.display=t==='transferencia'?'block':'none';
-  document.getElementById('label-cuenta').textContent=t==='transferencia'?'Cuenta origen':'Cuenta';
+  document.getElementById('label-cuenta').textContent=t==='transferencia'?'Cuenta origen':'Cuenta / Tarjeta';
+  
+  if(t === 'transferencia') {
+    var wOnlyHtml = '';
+    Object.keys(state.accounts).forEach(k => { wOnlyHtml += '<option value="w_'+k+'">'+(ACC_LABELS[k]||k)+'</option>'; });
+    var el = document.getElementById('f-cuenta');
+    if(el) { var v = el.value; el.innerHTML = wOnlyHtml; if(v) el.value = v; }
+  } else {
+    updateWalletSelects();
+  }
 }
 
 // ── ATOMIC BATCH SAVES ──
 function saveTransaction() {
   var desc=document.getElementById('f-desc').value.trim();
   var amount=getRawAmount('f-amount');
-  var cuenta=document.getElementById('f-cuenta').value;
+  var rawCuenta=document.getElementById('f-cuenta').value;
   var cat=document.getElementById('f-cat').value;
   var date=document.getElementById('f-date').value;
   var destino=document.getElementById('f-destino').value;
   var entidad=document.getElementById('f-entidad').value;
   if(!desc||!amount||amount<=0){alert('Completa descripción y monto');return;}
+  
+  var isInst = rawCuenta && rawCuenta.startsWith('i_');
+  var cuentaId = isInst ? rawCuenta.substring(2) : (rawCuenta && rawCuenta.startsWith('w_') ? rawCuenta.substring(2) : rawCuenta);
   
   var txnId = String(Date.now());
   var batch = db.batch();
@@ -389,22 +503,26 @@ function saveTransaction() {
   var tRef = wsRef.collection("transactions").doc(txnId);
   batch.set(tRef, {
       type: txnType, amount: amount, description: desc, date: date,
-      walletId: cuenta, destinationWalletId: txnType === 'transferencia' ? destino : null,
+      walletId: isInst ? null : cuentaId, 
+      instrumentId: isInst ? cuentaId : null,
+      destinationWalletId: txnType === 'transferencia' ? destino : null,
       categoryId: txnType === 'transferencia' ? null : cat, 
       entityId: entidad || null,
       status: "completed", origin: "manual",
       createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
   });
   
-  var wRef = wsRef.collection("wallets").doc(cuenta);
-  if (txnType === 'ingreso') {
-    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-  } else if (txnType === 'egreso') {
-    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-  } else if (txnType === 'transferencia') {
-    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
-    var destRef = wsRef.collection("wallets").doc(destino);
-    batch.update(destRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  if(!isInst) {
+    var wRef = wsRef.collection("wallets").doc(cuentaId);
+    if (txnType === 'ingreso') {
+      batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    } else if (txnType === 'egreso') {
+      batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    } else if (txnType === 'transferencia') {
+      batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+      var destRef = wsRef.collection("wallets").doc(destino);
+      batch.update(destRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    }
   }
 
   isSaving = true; syncStatus('saving');
@@ -602,7 +720,8 @@ function saveFixedItem() {
   var cat=document.getElementById('fx-cat').value;
   var entidad=document.getElementById('fx-entidad').value;
   var dueDay=parseInt(document.getElementById('fx-day').value) || 28;
-  var wallet=document.getElementById('fx-wallet').value || 'milo';
+  var rawWallet=document.getElementById('fx-wallet').value;
+  var wallet = rawWallet && rawWallet.startsWith('w_') ? rawWallet.substring(2) : rawWallet;
   if(!name||!amount||amount<=0){alert('Completa nombre y monto');return;}
   
   var fRef;
@@ -634,25 +753,30 @@ function deleteFixedItem(id) {
 function payFixedExpense(id) {
   var fx = state.fixedExpenses.find(x => x.id === id);
   if(!fx) return;
-  if(!confirm('¿Pagar ' + fx.name + ' desde ' + (ACC_LABELS[fx.walletId] || fx.walletId) + '?')) return;
+  var isInst = fx.walletId && fx.walletId.startsWith('i_');
+  var sourceId = isInst ? fx.walletId.substring(2) : fx.walletId;
+  var label = isInst ? (state.instruments.find(i=>i.id==sourceId)?.name || 'Tarjeta') : (ACC_LABELS[sourceId] || sourceId);
+  if(!confirm('¿Pagar ' + fx.name + ' desde ' + label + '?')) return;
   
   var txnId = String(Date.now());
   var batch = db.batch();
   var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
   
-  // Create Transaction
   var tRef = wsRef.collection("transactions").doc(txnId);
   batch.set(tRef, {
       type: 'egreso', amount: fx.amount, description: fx.name, date: todayStr(),
-      walletId: fx.walletId || 'milo', destinationWalletId: null,
+      walletId: isInst ? null : sourceId, 
+      instrumentId: isInst ? sourceId : null,
+      destinationWalletId: null,
       categoryId: fx.cat, entityId: fx.entityId || null,
       status: "completed", origin: "fixedExpense", commitmentId: String(id),
       createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
   });
   
-  // Update Wallet
-  var wRef = wsRef.collection("wallets").doc(fx.walletId || 'milo');
-  batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-fx.amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  if(!isInst) {
+    var wRef = wsRef.collection("wallets").doc(sourceId);
+    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-fx.amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  }
   
   syncStatus('saving');
   batch.commit().then(() => {
@@ -837,6 +961,115 @@ function renderDebts() {
 }
 
 
+// ── INSTRUMENTOS FINANCIEROS ──
+function openInstModal(id) {
+  editingInstId = id;
+  if(id) {
+    var i = state.instruments.find(x => x.id == id);
+    if(i) {
+      document.getElementById('i-name').value = i.name;
+      document.getElementById('i-entidad').value = i.entityId || '';
+      document.getElementById('i-limit').value = String(Math.round(i.creditLimit));
+      document.getElementById('i-limit-fmt').textContent = '$ ' + Math.round(i.creditLimit).toLocaleString('es-CO');
+      document.getElementById('inst-modal-title').textContent = 'Editar Tarjeta';
+      document.getElementById('inst-modal-btn').textContent = 'Guardar cambios';
+    }
+  } else {
+    document.getElementById('i-name').value = '';
+    document.getElementById('i-entidad').value = '';
+    document.getElementById('i-limit').value = '';
+    document.getElementById('i-limit-fmt').textContent = '';
+    document.getElementById('inst-modal-title').textContent = 'Nueva Tarjeta';
+    document.getElementById('inst-modal-btn').textContent = 'Guardar tarjeta';
+  }
+  document.getElementById('inst-modal').classList.add('open');
+}
+
+function closeInstModal() {
+  document.getElementById('inst-modal').classList.remove('open');
+  editingInstId = null;
+}
+
+function saveInstrument() {
+  var name = document.getElementById('i-name').value.trim();
+  var limit = getRawAmount('i-limit');
+  var entidad = document.getElementById('i-entidad').value;
+  if(!name || !limit || limit <= 0) { alert('Completa nombre y cupo total'); return; }
+  
+  var iRef;
+  if(editingInstId) {
+    iRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("instruments").doc(String(editingInstId));
+    iRef.update({ 
+      name: name, creditLimit: limit, entityId: entidad || null, updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
+    }).then(() => { closeInstModal(); toast('✓ Tarjeta actualizada'); });
+  } else {
+    iRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("instruments").doc(String(Date.now()));
+    iRef.set({ 
+      name: name, type: 'credit_card', creditLimit: limit, entityId: entidad || null, 
+      status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp() 
+    }).then(() => { closeInstModal(); toast('✓ Tarjeta agregada'); });
+  }
+}
+
+function deleteInst(id) {
+  if(!confirm('¿Eliminar esta tarjeta? Solo hazlo si la deuda está en $0.')) return;
+  db.collection("workspaces").doc(WORKSPACE_ID).collection("instruments").doc(String(id)).delete().then(() => toast('✓ Eliminada'));
+}
+
+function openInstPayModal(id) {
+  payingInstId = id;
+  var i = state.instruments.find(x => x.id == id);
+  if(!i) return;
+  
+  var spent = state.transactions.filter(t => t.type === 'egreso' && String(t.instrumentId) === String(id)).reduce((a,t)=>a+t.amount,0);
+  var paid = state.transactions.filter(t => t.type === 'cc_payment' && String(t.instrumentId) === String(id)).reduce((a,t)=>a+t.amount,0);
+  var deuda = spent - paid;
+  
+  document.getElementById('inst-pay-info').textContent = 'Deuda actual: ' + fmt(Math.max(0, deuda));
+  document.getElementById('ip-amount').value = '';
+  document.getElementById('ip-amount-fmt').textContent = '';
+  var wHtml = '';
+  Object.keys(state.accounts).forEach(k => { wHtml += '<option value="'+k+'">'+(ACC_LABELS[k]||k)+'</option>'; });
+  document.getElementById('ip-wallet').innerHTML = wHtml;
+  document.getElementById('inst-pay-modal').classList.add('open');
+}
+
+function closeInstPayModal() {
+  document.getElementById('inst-pay-modal').classList.remove('open');
+  payingInstId = null;
+}
+
+function processInstPayment() {
+  if(!payingInstId) return;
+  var amount = getRawAmount('ip-amount');
+  var wallet = document.getElementById('ip-wallet').value;
+  if(!amount || amount <= 0 || !wallet) { alert('Monto o cuenta inválidos'); return; }
+  
+  var txnId = String(Date.now());
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  
+  var tRef = wsRef.collection("transactions").doc(txnId);
+  batch.set(tRef, {
+      type: 'cc_payment', amount: amount, description: 'Pago Tarjeta de Crédito', date: todayStr(),
+      walletId: wallet, instrumentId: payingInstId, destinationWalletId: null,
+      categoryId: null, entityId: null,
+      status: "completed", origin: "ccPayment",
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
+  });
+  
+  var wRef = wsRef.collection("wallets").doc(wallet);
+  batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+  
+  syncStatus('saving');
+  batch.commit().then(() => {
+    syncStatus('ok'); toast('✓ Pago registrado');
+    closeInstPayModal();
+  }).catch(err => {
+    syncStatus('err'); toast('⚠️ '+err.message);
+  });
+}
+
 // ── RENDER COMPATIBILITY ──
 function getThisMonth() {
   var now=new Date();
@@ -847,19 +1080,31 @@ function getThisMonth() {
 }
 
 function txnHTML(t,showEdit) {
-  var isIng=t.type==='ingreso',isTr=t.type==='transferencia';
-  var cls=isIng?'ing':isTr?'tr':'eg';
-  var icon=isIng?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14"/><path d="M5 12l7 7 7-7"/></svg>':isTr?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 16l-4-4 4-4"/><path d="M17 8l4 4-4 4"/><line x1="3" y1="12" x2="21" y2="12"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
-  var accB='<span class="badge badge-'+t.cuenta+'">'+(ACC_LABELS[t.cuenta]||t.cuenta)+'</span>';
-  var dstB=isTr&&t.destino?' → <span class="badge badge-'+t.destino+'">'+(ACC_LABELS[t.destino]||t.destino)+'</span>':'';
+  var isIng=t.type==='ingreso',isTr=t.type==='transferencia',isCc=t.type==='cc_payment';
+  var cls=isIng?'ing':(isTr||isCc)?'tr':'eg';
+  var icon=isIng?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 5v14"/><path d="M5 12l7 7 7-7"/></svg>':(isTr||isCc)?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M7 16l-4-4 4-4"/><path d="M17 8l4 4-4 4"/><line x1="3" y1="12" x2="21" y2="12"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>';
+  
+  var accStr = t.cuenta ? (ACC_LABELS[t.cuenta]||t.cuenta) : 'N/A';
+  if(t.instrumentId && t.type !== 'cc_payment') {
+     var instObj = state.instruments ? state.instruments.find(x => x.id == t.instrumentId) : null;
+     accStr = instObj ? instObj.name : 'Tarjeta';
+  }
+  var accB='<span class="badge badge-milo">'+accStr+'</span>';
+  
+  var dstB='';
+  if(isTr&&t.destino) dstB=' → <span class="badge badge-'+t.destino+'">'+(ACC_LABELS[t.destino]||t.destino)+'</span>';
+  if(isCc&&t.instrumentId) {
+     var destObj = state.instruments ? state.instruments.find(x => x.id == t.instrumentId) : null;
+     dstB=' → <span class="badge badge-milo">'+(destObj ? destObj.name : 'Tarjeta')+'</span>';
+  }
   
   var entObj = t.entityId ? state.entities.find(e => e.id === t.entityId) : null;
   var entName = entObj ? entObj.name : '';
-  var catL = !isTr && t.cat ? ' · '+(CAT_LABELS[t.cat]||t.cat) : '';
-  if (entName && !isTr) catL = ' · ' + entName + catL;
+  var catL = !isTr && !isCc && t.cat ? ' · '+(CAT_LABELS[t.cat]||t.cat) : '';
+  if (entName && !isTr && !isCc) catL = ' · ' + entName + catL;
 
-  var editBtn=showEdit?'<button class="icon-btn edit" onclick="openEditModal('+t.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>':'';
-  return '<div class="txn"><div class="txn-icon '+cls+'">'+icon+'</div><div class="txn-info"><div class="txn-desc">'+t.desc+'</div><div class="txn-sub">'+t.date+' '+accB+dstB+catL+'</div></div><div class="txn-amount '+cls+'">'+(isIng?'+':isTr?'↔':'-')+fmt(t.amount)+'</div><div class="txn-actions">'+editBtn+'</div></div>';
+  var editBtn=(showEdit && t.type !== 'cc_payment')?'<button class="icon-btn edit" onclick="openEditModal('+t.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>':'';
+  return '<div class="txn"><div class="txn-icon '+cls+'">'+icon+'</div><div class="txn-info"><div class="txn-desc">'+t.desc+'</div><div class="txn-sub">'+t.date+' '+accB+dstB+catL+'</div></div><div class="txn-amount '+cls+'">'+(isIng?'+':(isTr||isCc)?'↔':'-')+fmt(t.amount)+'</div><div class="txn-actions">'+editBtn+'</div></div>';
 }
 
 function renderAll() {
@@ -869,9 +1114,6 @@ function renderAll() {
   var eg=month.filter(function(t){return t.type==='egreso';}).reduce(function(a,t){return a+t.amount;},0);
   var bal=ing-eg;
   document.getElementById('header-total').textContent=fmt(total);
-  document.getElementById('acc-milo-top').textContent=fmt(state.accounts.milo||0);
-  document.getElementById('acc-sari-top').textContent=fmt(state.accounts.sari||0);
-  document.getElementById('acc-cash-top').textContent=fmt(state.accounts.cash||0);
   document.getElementById('m-ing').textContent=fmt(ing);
   document.getElementById('m-eg').textContent=fmt(eg);
   var balEl=document.getElementById('m-bal');
@@ -896,7 +1138,12 @@ function renderMovimientos() {
   var ft=document.getElementById('filter-type').value,fa=document.getElementById('filter-acc').value;
   var txns=state.transactions;
   if(ft) txns=txns.filter(function(t){return t.type===ft;});
-  if(fa) txns=txns.filter(function(t){return t.cuenta===fa||t.destino===fa;});
+  if(fa) {
+    var isInst = fa.startsWith('i_');
+    var id = isInst ? fa.substring(2) : (fa.startsWith('w_') ? fa.substring(2) : fa);
+    if(isInst) txns = txns.filter(t => String(t.instrumentId) === id);
+    else txns = txns.filter(t => String(t.cuenta) === id || String(t.destino) === id);
+  }
   document.getElementById('mov-list').innerHTML=txns.length?txns.map(function(t){return txnHTML(t,true);}).join(''):'<div class="empty" style="padding:20px 0">Sin movimientos</div>';
 }
 

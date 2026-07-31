@@ -73,7 +73,6 @@
   </div>
 </div>
 
-
 <!-- EDIT MODAL -->
 <div class="modal-overlay" id="edit-modal">
   <div class="modal">
@@ -96,12 +95,12 @@
       <div class="amount-formatted" id="e-amount-fmt"></div>
     </div>
     <div class="form-group" id="erow-cuenta">
-      <label id="elabel-cuenta">Cuenta</label>
-      <select id="e-cuenta"><option value="milo">Cuenta Milo</option><option value="sari">Cuenta Sari</option><option value="cash">Caja fuerte</option></select>
+      <label id="elabel-cuenta">Cuenta / Tarjeta</label>
+      <select id="e-cuenta"></select>
     </div>
     <div class="form-group" id="erow-destino" style="display:none">
       <label>Cuenta destino</label>
-      <select id="e-destino"><option value="sari">Cuenta Sari</option><option value="milo">Cuenta Milo</option><option value="cash">Caja fuerte</option></select>
+      <select id="e-destino"></select>
     </div>
     <div class="form-group" id="erow-entidad">
       <label>Entidad (Opcional)</label>
@@ -153,7 +152,7 @@
       </div>
       <div class="form-group" style="flex:1">
         <label>Pagar desde</label>
-        <select id="fx-wallet"><option value="milo">Milo</option><option value="sari">Sari</option><option value="cash">Caja</option></select>
+        <select id="fx-wallet"></select>
       </div>
     </div>
     <div class="form-group">
@@ -175,6 +174,54 @@
       </select>
     </div>
     <button class="btn-save" id="fixed-modal-btn" onclick="saveFixedItem()">Agregar gasto fijo</button>
+  </div>
+</div>
+
+<!-- INSTRUMENT CRUD MODAL -->
+<div class="modal-overlay" id="inst-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="inst-modal-title">Nueva Tarjeta</div>
+      <button class="modal-close" onclick="closeInstModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="form-group"><label>Nombre de la tarjeta</label><input type="text" id="i-name" placeholder="ej. TC Bancolombia, Nu Bank..."></div>
+    <div class="form-group">
+      <label>Entidad emisora</label>
+      <select id="i-entidad" onchange="handleEntityChange(this)"><option value="">Sin entidad</option><option value="NEW">+ Nueva entidad...</option></select>
+    </div>
+    <div class="form-group">
+      <label>Cupo Total Aprobado (COP $)</label>
+      <div class="amount-wrap">
+        <span class="amount-currency">$</span>
+        <input type="text" id="i-limit" inputmode="numeric" placeholder="0" oninput="formatAmountInput(this,'i-limit-fmt')">
+      </div>
+      <div class="amount-formatted" id="i-limit-fmt"></div>
+    </div>
+    <button class="btn-save" id="inst-modal-btn" onclick="saveInstrument()">Guardar tarjeta</button>
+  </div>
+</div>
+
+<!-- PAY INSTRUMENT MODAL -->
+<div class="modal-overlay" id="inst-pay-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Pagar Tarjeta de Crédito</div>
+      <button class="modal-close" onclick="closeInstPayModal()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div style="font-size:13px;color:var(--text2);margin-bottom:14px;text-align:center" id="inst-pay-info">Deuda actual: $0</div>
+    <div class="form-group">
+      <label>Monto a pagar (COP $)</label>
+      <div class="amount-wrap">
+        <span class="amount-currency">$</span>
+        <input type="text" id="ip-amount" inputmode="numeric" placeholder="0" oninput="formatAmountInput(this,'ip-amount-fmt')">
+      </div>
+      <div class="amount-formatted" id="ip-amount-fmt"></div>
+    </div>
+    <div class="form-group">
+      <label>Descontar dinero desde</label>
+      <select id="ip-wallet"></select>
+    </div>
+    <button class="btn-save" onclick="processInstPayment()">Registrar pago</button>
   </div>
 </div>
 
@@ -224,7 +271,7 @@
     </div>
     <div class="form-group">
       <label id="dp-wallet-label">Cuenta origen</label>
-      <select id="dp-wallet"><option value="milo">Cuenta Milo</option><option value="sari">Cuenta Sari</option><option value="cash">Caja fuerte</option></select>
+      <select id="dp-wallet"></select>
     </div>
     <button class="btn-save" onclick="processDebtPayment()">Registrar abono</button>
   </div>
@@ -243,30 +290,24 @@
     </div>
   </div>
   <div style="font-size:11px;color:var(--text3);margin-bottom:5px" id="month-label"></div>
-  <div class="total-label">Total disponible</div>
+  <div class="total-label">Dinero Disponible (Líquido)</div>
   <div class="total-display" id="header-total">$0</div>
 </div>
 
-<div class="accounts-row">
-  <div class="acc-chip">
-    <div class="acc-dot" style="background:var(--blue)"></div>
-    <span class="acc-chip-label">Milo</span>
-    <span class="acc-chip-val" id="acc-milo-top" style="color:var(--blue)">$0</span>
-  </div>
-  <div class="acc-chip">
-    <div class="acc-dot" style="background:var(--pink)"></div>
-    <span class="acc-chip-label">Sari</span>
-    <span class="acc-chip-val" id="acc-sari-top" style="color:var(--pink)">$0</span>
-  </div>
-  <div class="acc-chip">
-    <div class="acc-dot" style="background:var(--gold)"></div>
-    <span class="acc-chip-label">Caja fuerte</span>
-    <span class="acc-chip-val" id="acc-cash-top" style="color:var(--gold)">$0</span>
-  </div>
+<div class="accounts-row" id="wallets-row">
+  <!-- Rendered by JS -->
+</div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;padding:0 20px;margin-top:20px;margin-bottom:8px">
+  <div class="total-label" style="padding:0;margin:0">Capacidad Financiera</div>
+  <button class="icon-btn" onclick="openInstModal(null)" style="color:var(--blue)" title="Agregar Tarjeta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="20" height="20"><path d="M12 5v14M5 12h14"/></svg></button>
+</div>
+<div style="padding:0 20px" id="instruments-list">
+  <!-- Rendered by JS -->
 </div>
 
 <!-- RESUMEN -->
-<div class="section active" id="tab-resumen">
+<div class="section active" id="tab-resumen" style="margin-top:16px">
   <div class="metrics-grid">
     <div class="metric-card"><div class="metric-lbl">Ingresos</div><div class="metric-val pos" id="m-ing">$0</div></div>
     <div class="metric-card"><div class="metric-lbl">Egresos</div><div class="metric-val neg" id="m-eg">$0</div></div>
@@ -295,12 +336,12 @@
       <div class="amount-formatted" id="f-amount-fmt"></div>
     </div>
     <div class="form-group" id="row-cuenta">
-      <label id="label-cuenta">Cuenta</label>
-      <select id="f-cuenta"><option value="milo">Cuenta Milo</option><option value="sari">Cuenta Sari</option><option value="cash">Caja fuerte (efectivo)</option></select>
+      <label id="label-cuenta">Cuenta / Tarjeta</label>
+      <select id="f-cuenta"></select>
     </div>
     <div class="form-group" id="row-destino" style="display:none">
       <label>Cuenta destino</label>
-      <select id="f-destino"><option value="sari">Cuenta Sari</option><option value="milo">Cuenta Milo</option><option value="cash">Caja fuerte (efectivo)</option></select>
+      <select id="f-destino"></select>
     </div>
     <div class="form-group" id="row-entidad">
       <label>Entidad (Opcional)</label>
@@ -332,7 +373,7 @@
 <div class="section" id="tab-movimientos">
   <div class="filter-row">
     <select id="filter-type" onchange="renderMovimientos()" style="flex:1"><option value="">Todos</option><option value="ingreso">Ingresos</option><option value="egreso">Egresos</option><option value="transferencia">Traslados</option></select>
-    <select id="filter-acc" onchange="renderMovimientos()" style="flex:1"><option value="">Todas las cuentas</option><option value="milo">Milo</option><option value="sari">Sari</option><option value="cash">Caja fuerte</option></select>
+    <select id="filter-acc" onchange="renderMovimientos()" style="flex:1"></select>
   </div>
   <div class="card" style="padding:0 14px"><div id="mov-list"></div></div>
 </div>
