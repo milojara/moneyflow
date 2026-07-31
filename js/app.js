@@ -23,6 +23,7 @@ var MONTHS = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto',
 
 // Estado en memoria
 var state = {transactions:[],goals:[],accounts:{},wallets:[],categories:[],fixedExpenses:[],entities:[],debts:[],instruments:[]};
+var workspaceSettings = {};
 
 state.activePeriod = { month: new Date().getMonth(), year: new Date().getFullYear() };
 
@@ -1392,10 +1393,7 @@ function renderDebts() {
   
   var activeDebts = state.debts.filter(d => d.status !== 'archived');
   
-  if(!activeDebts.length) { 
-    el.innerHTML = '<div class="empty" style="padding:20px 0">No tienes deudas activas</div>'; 
-    return; 
-  }
+  if(!activeDebts.length) { el.innerHTML = '<div class="empty" style="padding:40px 20px"><div style="font-size:32px;margin-bottom:12px">🤝</div><div style="margin-bottom:8px;font-size:14px;color:var(--text1);font-weight:600">Sin deudas activas</div><div style="margin-bottom:20px;font-size:13px">Registra préstamos y deudas con terceros para mantener el control de tus saldos pendientes.</div><button class="btn" style="width:100%" onclick="openDebtCrudModal(null)">+ Registrar Deuda</button></div>'; return; }
   
   el.innerHTML = activeDebts.map(d => {
     var endStr = getPeriodEndStr();
@@ -1573,7 +1571,66 @@ function txnHTML(t,showEdit) {
   return '<div class="txn"><div class="txn-icon '+cls+'">'+icon+'</div><div class="txn-info"><div class="txn-desc">'+t.desc+'</div><div class="txn-sub">'+t.date+' '+accB+dstB+catL+'</div></div><div class="txn-amount '+cls+'">'+(isIng?'+':(isTr||isCc)?'↔':'-')+fmt(t.amount)+'</div><div class="txn-actions">'+editBtn+'</div></div>';
 }
 
+
+function renderOnboardingChecklist() {
+   var el = document.getElementById('onboarding-container');
+   if(!el) return;
+   if (workspaceSettings.onboardingCompleted) {
+      el.innerHTML = '';
+      return;
+   }
+   
+   var hasWallet = state.wallets.length > 0;
+   var hasIncome = state.transactions.some(t => t.type === 'ingreso');
+   var hasExpense = state.transactions.some(t => t.type === 'egreso');
+   var hasFixed = state.fixedExpenses && state.fixedExpenses.length > 0;
+   var hasCard = state.instruments && state.instruments.length > 0;
+   
+   var steps = [
+      { id: 'wallet', label: 'Crea tu primera cuenta', done: hasWallet, action: 'openWalletCrudModal()' },
+      { id: 'income', label: 'Registra un ingreso inicial', done: hasIncome, action: 'document.getElementById(\'nav-nuevo\').click(); setType(\'ingreso\');' },
+      { id: 'expense', label: 'Registra tu primer gasto', done: hasExpense, action: 'document.getElementById(\'nav-nuevo\').click(); setType(\'egreso\');' },
+      { id: 'fixed', label: 'Agrega un gasto fijo', done: hasFixed, action: 'document.getElementById(\'nav-fijos\').click()' },
+      { id: 'card', label: 'Agrega una tarjeta', done: hasCard, action: 'document.getElementById(\'nav-instrumentos\').click()' }
+   ];
+   
+   var total = steps.length;
+   var completed = steps.filter(s => s.done).length;
+   
+   if (completed === total) {
+      db.collection("workspaces").doc(WORKSPACE_ID).set({
+         settings: { onboardingCompleted: true }
+      }, { merge: true });
+      return;
+   }
+   
+   var pct = Math.round((completed / total) * 100);
+   
+   var html = '<div class="card" style="margin-bottom:16px; border:1.5px solid var(--blue)">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+                 '<div style="font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px"><span>🚀</span> Guía de Inicio</div>' +
+                 '<div style="font-size:12px;color:var(--text2)">'+completed+' de '+total+' completados</div>' +
+              '</div>' +
+              '<div style="background:var(--bg2);height:6px;border-radius:3px;margin-bottom:16px;overflow:hidden"><div style="background:var(--blue);height:100%;width:'+pct+'%;transition:width 0.3s"></div></div>' +
+              '<div style="display:flex;flex-direction:column;gap:12px">';
+              
+   steps.forEach(s => {
+      if (s.done) {
+         html += '<div style="display:flex;align-items:center;gap:10px;opacity:0.5"><div style="color:var(--green)">✅</div><div style="font-size:13px;text-decoration:line-through">'+s.label+'</div></div>';
+      } else {
+         html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">' +
+                 '<div style="display:flex;align-items:center;gap:10px"><div style="width:16px;height:16px;border:2px solid var(--text3);border-radius:50%"></div><div style="font-size:13px;color:var(--text1)">'+s.label+'</div></div>' +
+                 '<button class="btn" style="font-size:11px;padding:4px 10px;height:auto" onclick="'+s.action+'">Hacerlo</button>' +
+                 '</div>';
+      }
+   });
+   
+   html += '</div></div>';
+   el.innerHTML = html;
+}
+
 function renderAll() {
+  renderOnboardingChecklist();
   var total=Object.values(state.accounts).reduce(function(a,b){return a+(b||0);},0);
   var month=getActivePeriodTransactions();
   updatePeriodUI();
@@ -1660,7 +1717,7 @@ function renderAll() {
   var catEl=document.getElementById('cat-bars');
   var catArr = [];
   if(catEl) {
-    if(!egs.length){catEl.innerHTML='<div class="empty">Sin egresos este mes</div>';}
+    if(!egs.length){catEl.innerHTML = state.transactions.length === 0 ? '<div class="empty">Cuando registres gastos, aquí verás su distribución.</div>' : '<div class="empty">Sin egresos este mes</div>';}
     else {
       var catSums={};
       egs.forEach(function(t){
@@ -1704,8 +1761,18 @@ function renderAll() {
       insCont.innerHTML = insights.map(i => '<div style="margin-bottom:8px;display:flex;gap:10px;align-items:start"><span style="color:var(--blue);font-size:16px;line-height:1">✧</span> <div>'+i+'</div></div>').join('');
   }
 
+  
   var rl = document.getElementById('recent-list');
-  if(rl) rl.innerHTML=state.transactions.length?state.transactions.slice(0,5).map(function(t){return txnHTML(t,true);}).join(''):'<div class="empty">Sin movimientos aún</div>';
+  if(rl) {
+     if(state.wallets.length === 0) {
+        rl.innerHTML = '<div class="empty">Crea una cuenta primero para añadir movimientos.</div>';
+     } else if(state.transactions.length === 0) {
+        rl.innerHTML = '<div class="empty" style="padding:24px 0"><div style="font-size:24px;margin-bottom:8px">📝</div><div style="margin-bottom:12px;font-size:13px;color:var(--text1)">Registra tu primer movimiento</div><button class="btn" onclick="document.getElementById(\'nav-nuevo\').click(); setType(\'egreso\');">Comenzar</button></div>';
+     } else {
+        rl.innerHTML = state.transactions.slice(0,5).map(function(t){return txnHTML(t,true);}).join('');
+     }
+  }
+
   
   renderWalletsRow();
   renderFijos();
