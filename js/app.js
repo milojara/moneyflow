@@ -55,7 +55,18 @@ function updatePeriodUI() {
   var el = document.getElementById('active-period-label');
   if(el) el.textContent = mName + ' ' + state.activePeriod.year;
 }
+
+function getPreviousPeriodTransactions() {
+  var prevMonth = state.activePeriod.month - 1;
+  var prevYear = state.activePeriod.year;
+  if(prevMonth < 0) { prevMonth = 11; prevYear--; }
+  return state.transactions.filter(function(t){
+    var d = new Date(t.date + 'T12:00:00');
+    return d.getMonth() === prevMonth && d.getFullYear() === prevYear;
+  });
+}
 function getActivePeriodTransactions() {
+
   return state.transactions.filter(function(t){
     var d = new Date(t.date + 'T12:00:00');
     return d.getMonth() === state.activePeriod.month && d.getFullYear() === state.activePeriod.year;
@@ -1569,25 +1580,135 @@ function renderAll() {
   var ing=month.filter(function(t){return t.type==='ingreso';}).reduce(function(a,t){return a+t.amount;},0);
   var eg=month.filter(function(t){return t.type==='egreso';}).reduce(function(a,t){return a+t.amount;},0);
   var bal=ing-eg;
-  document.getElementById('header-total').textContent=fmt(total);
-  document.getElementById('m-ing').textContent=fmt(ing);
-  document.getElementById('m-eg').textContent=fmt(eg);
+  
+  // Update header
+  var headTotal = document.getElementById('header-total');
+  if(headTotal) headTotal.textContent=fmt(total);
+  
+  var mIng = document.getElementById('m-ing');
+  if(mIng) mIng.textContent=fmt(ing);
+  
+  var mEg = document.getElementById('m-eg');
+  if(mEg) mEg.textContent=fmt(eg);
+  
   var balEl=document.getElementById('m-bal');
-  balEl.textContent=fmt(bal); balEl.className='metric-val '+(bal>=0?'pos':'neg');
-  document.getElementById('m-count').textContent=month.length;
+  if(balEl) { balEl.textContent=fmt(bal); balEl.style.color = bal>=0 ? 'var(--green)' : 'var(--text1)'; }
+  
+  // Phase 9 logic
+  var prevTxns = getPreviousPeriodTransactions();
+  var pIng = prevTxns.filter(t => t.type === 'ingreso').reduce((a,t)=>a+t.amount,0);
+  var pEg = prevTxns.filter(t => t.type === 'egreso').reduce((a,t)=>a+t.amount,0);
+  
+  // Health badge
+  var hBadge = document.getElementById('health-badge');
+  if(hBadge) {
+     if (bal > 0) { hBadge.textContent = 'Saludable'; hBadge.style.background = 'rgba(76, 175, 80, 0.2)'; hBadge.style.color = 'var(--green)'; }
+     else if (bal === 0) { hBadge.textContent = 'Neutral'; hBadge.style.background = 'rgba(255, 255, 255, 0.1)'; hBadge.style.color = 'var(--text1)'; }
+     else { hBadge.textContent = 'Atención'; hBadge.style.background = 'rgba(244, 67, 54, 0.2)'; hBadge.style.color = 'var(--red)'; }
+  }
+  
+  // ALERTS (Atención Inmediata)
+  var alerts = [];
+  (state.fixedExpenses || []).forEach(f => {
+     if(f.status === 'archived') return;
+     var isPaid = !!month.find(t => t.origin === 'fixedExpense' && String(t.commitmentId) === String(f.id));
+     if(isPaid) return;
+     
+     var day = parseInt(f.dueDay) || 28;
+     var stateStr = 'pending';
+     if (!isCurrentPeriod()) {
+        var act = new Date(state.activePeriod.year, state.activePeriod.month, day);
+        if (act < new Date()) stateStr = 'overdue';
+     } else {
+        var todayDay = new Date().getDate();
+        if (todayDay > day) stateStr = 'overdue';
+        else if (day - todayDay <= 5) stateStr = 'upcoming';
+     }
+     if (stateStr === 'overdue') alerts.push({ type: 'danger', text: 'Gasto vencido: <strong>' + f.name + '</strong> (' + fmt(f.amount) + ')' });
+     else if (stateStr === 'upcoming') alerts.push({ type: 'warning', text: 'Próximo pago: <strong>' + f.name + '</strong> (' + fmt(f.amount) + ')' });
+  });
+  
+  (state.instruments || []).forEach(i => {
+     var endStr = getPeriodEndStr();
+     var spent = state.transactions.filter(t => t.type === 'egreso' && String(t.instrumentId) === String(i.id) && t.date <= endStr).reduce((a,t)=>a+t.amount,0);
+     var paid = state.transactions.filter(t => t.type === 'cc_payment' && String(t.instrumentId) === String(i.id) && t.date <= endStr).reduce((a,t)=>a+t.amount,0);
+     var deuda = spent - paid;
+     if(deuda < 0) deuda = 0;
+     var cupo = i.limit || 0;
+     if (cupo > 0) {
+        var pct = (deuda / cupo) * 100;
+        if (pct >= 85) alerts.push({ type: 'warning', text: 'Tarjeta <strong>' + i.name + '</strong> al límite ('+Math.round(pct)+'% usado).' });
+     }
+  });
+  
+  var alCont = document.getElementById('alerts-container');
+  if(alCont) {
+      if (alerts.length > 0) {
+          alCont.innerHTML = alerts.map(a => {
+             var bg = a.type === 'danger' ? 'rgba(244,67,54,0.1)' : 'rgba(255,152,0,0.1)';
+             var col = a.type === 'danger' ? 'var(--red)' : 'var(--orange)';
+             var icon = a.type === 'danger' ? '⚠️' : '🔔';
+             return '<div style="background:'+bg+';color:'+col+';padding:12px;border-radius:12px;margin-bottom:10px;font-size:13px;display:flex;gap:10px;align-items:center"><span>'+icon+'</span> <div>'+a.text+'</div></div>';
+          }).join('');
+      } else {
+          alCont.innerHTML = '<div style="background:var(--bg2);color:var(--text2);padding:12px;border-radius:12px;margin-bottom:10px;font-size:13px;display:flex;gap:10px;align-items:center;border:1px solid var(--border)"><span>✅</span> <div>Todo al día. No hay pendientes urgentes.</div></div>';
+      }
+  }
+
+  // Calculate Cat Bars
   var egs=month.filter(function(t){return t.type==='egreso';});
   var catEl=document.getElementById('cat-bars');
-  if(!egs.length){catEl.innerHTML='<div class="empty">Sin egresos este mes</div>';}
-  else{
-    var cats={};
-    egs.forEach(function(t){cats[t.cat]=(cats[t.cat]||0)+t.amount;});
-    var totEg=Object.values(cats).reduce(function(a,b){return a+b;},0);
-    catEl.innerHTML=Object.entries(cats).sort(function(a,b){return b[1]-a[1];}).map(function(e){
-      var pct=Math.round(e[1]/totEg*100);
-      return '<div class="cat-row"><div class="cat-row-top"><span>'+(CAT_LABELS[e[0]]||e[0])+'</span><span>'+fmt(e[1])+' · '+pct+'%</span></div><div class="cat-bar-bg"><div class="cat-bar-fill" style="width:'+pct+'%;background:'+(CAT_COLORS[e[0]]||'#888')+'"></div></div></div>';
-    }).join('');
+  var catArr = [];
+  if(catEl) {
+    if(!egs.length){catEl.innerHTML='<div class="empty">Sin egresos este mes</div>';}
+    else {
+      var catSums={};
+      egs.forEach(function(t){
+        var c=t.categoria||'otro';
+        catSums[c]=(catSums[c]||0)+t.amount;
+      });
+      catArr=Object.keys(catSums).map(function(k){
+         var meta = getCategoryMeta(k);
+         return {name:meta.name, icon:meta.icon, color:meta.color, val:catSums[k]};
+      }).sort(function(a,b){return b.val-a.val;});
+      var maxCat=catArr.length?catArr[0].val:1;
+      var cHtml='';
+      catArr.forEach(function(c){
+        var p=Math.round((c.val/maxCat)*100);
+        cHtml+='<div class="cat-row"><div class="cat-label"><span style="display:inline-block;width:20px;text-align:center">'+c.icon+'</span> '+c.name+' <span style="color:var(--text3);float:right">'+fmt(c.val)+'</span></div><div class="cat-bar-bg"><div class="cat-bar-fill" style="width:'+p+'%;background:'+c.color+'"></div></div></div>';
+      });
+      catEl.innerHTML=cHtml;
+    }
   }
-  document.getElementById('recent-list').innerHTML=state.transactions.length?state.transactions.slice(0,5).map(function(t){return txnHTML(t,true);}).join(''):'<div class="empty">Sin movimientos aún</div>';
+
+  // INSIGHTS
+  var insights = [];
+  if (pEg > 0) {
+      var diff = eg - pEg;
+      var pct = Math.abs(Math.round((diff / pEg) * 100));
+      if (diff > 0) insights.push('🔺 Has gastado un <strong>' + pct + '% más</strong> que el mes anterior.');
+      else if (diff < 0) insights.push('📉 Has reducido tus gastos un <strong>' + pct + '%</strong> frente al mes pasado.');
+      else insights.push('⚖️ Tus gastos son exactamente iguales al mes anterior.');
+  }
+  if (catArr.length > 0) {
+      var top = catArr[0];
+      var pctTop = Math.round((top.val / eg) * 100);
+      insights.push(top.icon + ' <strong>' + top.name + '</strong> representa el <strong>' + pctTop + '%</strong> de tus salidas de dinero.');
+  }
+  if (insights.length === 0) {
+      insights.push('Aún no hay suficientes datos para generar observaciones en este período.');
+  }
+  
+  var insCont = document.getElementById('insights-container');
+  if(insCont) {
+      insCont.innerHTML = insights.map(i => '<div style="margin-bottom:8px;display:flex;gap:10px;align-items:start"><span style="color:var(--blue);font-size:16px;line-height:1">✧</span> <div>'+i+'</div></div>').join('');
+  }
+
+  var rl = document.getElementById('recent-list');
+  if(rl) rl.innerHTML=state.transactions.length?state.transactions.slice(0,5).map(function(t){return txnHTML(t,true);}).join(''):'<div class="empty">Sin movimientos aún</div>';
+  
+  renderWalletsRow();
+  renderFijos();
 }
 
 function renderMovimientos() {
