@@ -1,0 +1,13 @@
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Dependencias
+node_modules/
+package-lock.json
+package.json
+
+# Archivos temporales de depuración
+debug_app.js
+fix_migration.js
+fix_syntax.js

@@ -95,6 +95,7 @@ var selectedWalletColor = "var(--blue)";
 var editingCategoryId = null;
 var selectedCategoryColor = "var(--blue)";
 var currentCategoryListType = "egreso";
+var homeConfig = {showAlerts:true,showResumen:true,showAnalisis:true,showAsistente:true,showMetas:true,showAhorro:true,showRecientes:true};
 
 function updateWalletSelects() {
   var activeWs = state.wallets.filter(w => w.status !== 'archived');
@@ -206,13 +207,13 @@ function renderInstruments() {
 
 // ── AMOUNT FORMATTING ──
 function formatAmountInput(input, fmtId) {
-  var raw = input.value.replace(/\\D/g,'');
+  var raw = input.value.replace(/\D/g,'');
   if (raw.length > 12) raw = raw.slice(0,12);
   input.value = raw;
   var fmtEl = document.getElementById(fmtId);
   if (fmtEl) {
     if (raw) {
-      fmtEl.textContent = '$ ' + parseInt(raw).toLocaleString('es-CO');
+      fmtEl.textContent = '$ ' + parseInt(raw).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'.');
     } else {
       fmtEl.textContent = '';
     }
@@ -253,7 +254,47 @@ function toast(msg) {
   setTimeout(function(){ el.classList.remove('show'); }, 2500);
 }
 
-function fmt(n) { return '$'+Math.round(n||0).toLocaleString('es-CO'); }
+function fmt(n) { return '$'+Math.round(n||0).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'.'); }
+
+// ── HOME MODULAR CONFIG ──
+function applyHomeConfig() {
+  var widgets = {
+    'widget-alerts': homeConfig.showAlerts,
+    'widget-resumen': homeConfig.showResumen,
+    'widget-analisis': homeConfig.showAnalisis,
+    'widget-asistente': homeConfig.showAsistente,
+    'widget-metas': homeConfig.showMetas,
+    'widget-ahorro': homeConfig.showAhorro,
+    'widget-recientes': homeConfig.showRecientes
+  };
+  var anyVisible = false;
+  Object.keys(widgets).forEach(function(id) {
+    var el = document.getElementById(id);
+    if(el) { el.style.display = widgets[id] ? '' : 'none'; if(widgets[id]) anyVisible = true; }
+  });
+  var msgEl = document.getElementById('home-empty-msg');
+  if(msgEl) msgEl.style.display = anyVisible ? 'none' : '';
+}
+
+function syncConfigToggles() {
+  var map = {
+    'toggle-alerts':'showAlerts','toggle-resumen':'showResumen',
+    'toggle-analisis':'showAnalisis','toggle-asistente':'showAsistente',
+    'toggle-metas':'showMetas','toggle-ahorro':'showAhorro',
+    'toggle-recientes':'showRecientes'
+  };
+  Object.keys(map).forEach(function(id) {
+    var el = document.getElementById(id);
+    if(el) el.checked = homeConfig[map[id]];
+  });
+}
+
+function saveHomeWidget(key, val) {
+  homeConfig[key] = val;
+  applyHomeConfig();
+  db.collection("workspaces").doc(WORKSPACE_ID).update({ homeConfig: homeConfig })
+    .catch(function(e) { console.error('homeConfig save error:', e); });
+}
 
 // ── MIGRACIÓN A V1 ──
 async function migrateToV1() {
@@ -356,6 +397,12 @@ function startListeners() {
   wsRef.onSnapshot(snap => {
     if(snap.exists) {
       workspaceSettings = snap.data().settings || {};
+      var savedConfig = snap.data().homeConfig || {};
+      Object.keys(homeConfig).forEach(function(k) {
+        if(savedConfig[k] !== undefined) homeConfig[k] = savedConfig[k];
+      });
+      applyHomeConfig();
+      syncConfigToggles();
       renderOnboardingChecklist();
     }
   });
@@ -482,6 +529,7 @@ function startListeners() {
     });
     state.goals = goals;
     renderGoals();
+    renderHomeMetas();
   });
   
   wsRef.collection("fixed_expenses").onSnapshot(snap => {
@@ -680,11 +728,12 @@ function processWalletArchive() {
       balance: firebase.firestore.FieldValue.increment(w.balance), updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
   });
   
-  syncStatus('saving');
+  if(isSaving) return;
+  isSaving = true; syncStatus('saving');
   batch.commit().then(() => {
-    syncStatus('ok'); toast('✓ Cuenta archivada y fondos transferidos');
+    isSaving = false; syncStatus('ok'); toast('✓ Cuenta archivada y fondos transferidos');
     closeWalletArchiveModal();
-  }).catch(e => { syncStatus('err'); toast('⚠️ ' + e.message); });
+  }).catch(e => { isSaving = false; syncStatus('err'); toast('⚠️ ' + e.message); });
 }
 
 
@@ -839,7 +888,7 @@ function archiveCategory(id) {
 
 // ── CONFIG Y ENTIDADES ──
 
-function openConfigModal() { document.getElementById('config-modal').classList.add('open'); }
+function openConfigModal() { syncConfigToggles(); document.getElementById('config-modal').classList.add('open'); }
 function closeConfigModal() { document.getElementById('config-modal').classList.remove('open'); }
 
 function openEntityListModal() { document.getElementById('entity-list-modal').classList.add('open'); }
@@ -962,7 +1011,7 @@ function setType(t) {
   
   if(t === 'transferencia') {
     var wOnlyHtml = '';
-    Object.keys(state.accounts).forEach(k => { wOnlyHtml += '<option value="w_'+k+'">'+(ACC_LABELS[k]||k)+'</option>'; });
+    state.wallets.filter(w => w.status !== 'archived').forEach(w => { wOnlyHtml += '<option value="w_'+w.id+'">'+w.name+'</option>'; });
     var el = document.getElementById('f-cuenta');
     if(el) { var v = el.value; el.innerHTML = wOnlyHtml; if(v) el.value = v; }
   } else {
@@ -1031,8 +1080,8 @@ function openEditModal(id) {
   setEditType(t.type);
   document.getElementById('e-desc').value=t.desc;
   document.getElementById('e-amount').value=String(Math.round(t.amount));
-  document.getElementById('e-amount-fmt').textContent='$ '+Math.round(t.amount).toLocaleString('es-CO');
-  document.getElementById('e-cuenta').value=t.cuenta;
+  document.getElementById('e-amount-fmt').textContent='$ '+Math.round(t.amount).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'.');
+  document.getElementById('e-cuenta').value = t.instrumentId ? 'i_'+t.instrumentId : (t.cuenta || '');
   if(t.destino) document.getElementById('e-destino').value=t.destino;
   document.getElementById('e-cat').value=t.cat||'otro';
   document.getElementById('e-entidad').value=t.entityId||'';
@@ -1067,34 +1116,42 @@ function saveEdit() {
   var batch = db.batch();
   var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
   
-  // 1. REVERSE OLD
-  var oldWRef = wsRef.collection("wallets").doc(old.cuenta);
-  if (old.type === 'ingreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
-  else if (old.type === 'egreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
-  else if (old.type === 'transferencia') {
-    batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
-    var oldDestRef = wsRef.collection("wallets").doc(old.destino);
-    batch.update(oldDestRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+  // 1. REVERSE OLD — solo si la transacción original era de billetera (no TC)
+  if (old.cuenta) {
+    var oldWRef = wsRef.collection("wallets").doc(old.cuenta);
+    if (old.type === 'ingreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+    else if (old.type === 'egreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
+    else if (old.type === 'transferencia') {
+      batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
+      var oldDestRef = wsRef.collection("wallets").doc(old.destino);
+      batch.update(oldDestRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+    }
   }
 
-  // 2. APPLY NEW
-  var newCuenta = document.getElementById('e-cuenta').value;
+  // 2. APPLY NEW — detectar si nueva cuenta es TC (prefijo i_)
+  var rawNewCuenta = document.getElementById('e-cuenta').value;
   var newDestino = document.getElementById('e-destino').value;
-  var newWRef = wsRef.collection("wallets").doc(newCuenta);
-  
-  if (editType === 'ingreso') batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(amount) });
-  else if (editType === 'egreso') batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(-amount) });
-  else if (editType === 'transferencia') {
-    batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(-amount) });
-    var newDestRef = wsRef.collection("wallets").doc(newDestino);
-    batch.update(newDestRef, { balance: firebase.firestore.FieldValue.increment(amount) });
+  var isNewInst = rawNewCuenta && rawNewCuenta.startsWith('i_');
+  var newCuentaId = isNewInst ? rawNewCuenta.substring(2) : rawNewCuenta;
+
+  if (!isNewInst) {
+    var newWRef = wsRef.collection("wallets").doc(newCuentaId);
+    if (editType === 'ingreso') batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(amount) });
+    else if (editType === 'egreso') batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(-amount) });
+    else if (editType === 'transferencia') {
+      batch.update(newWRef, { balance: firebase.firestore.FieldValue.increment(-amount) });
+      var newDestRef = wsRef.collection("wallets").doc(newDestino);
+      batch.update(newDestRef, { balance: firebase.firestore.FieldValue.increment(amount) });
+    }
   }
-  
+
   // 3. UPDATE TRANSACTION
   var tRef = wsRef.collection("transactions").doc(String(editingId));
   batch.update(tRef, {
     type: editType, amount: amount, description: document.getElementById('e-desc').value.trim(),
-    date: document.getElementById('e-date').value, walletId: newCuenta,
+    date: document.getElementById('e-date').value,
+    walletId: isNewInst ? null : newCuentaId,
+    instrumentId: isNewInst ? newCuentaId : null,
     destinationWalletId: editType === 'transferencia' ? newDestino : null,
     categoryId: editType === 'transferencia' ? null : document.getElementById('e-cat').value,
     entityId: entidad || null,
@@ -1118,13 +1175,15 @@ function deleteFromModal() {
   var batch = db.batch();
   var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
   
-  var oldWRef = wsRef.collection("wallets").doc(old.cuenta);
-  if (old.type === 'ingreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
-  else if (old.type === 'egreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
-  else if (old.type === 'transferencia') {
-    batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
-    var oldDestRef = wsRef.collection("wallets").doc(old.destino);
-    batch.update(oldDestRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+  if (old.cuenta) {
+    var oldWRef = wsRef.collection("wallets").doc(old.cuenta);
+    if (old.type === 'ingreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+    else if (old.type === 'egreso') batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
+    else if (old.type === 'transferencia') {
+      batch.update(oldWRef, { balance: firebase.firestore.FieldValue.increment(old.amount) });
+      var oldDestRef = wsRef.collection("wallets").doc(old.destino);
+      batch.update(oldDestRef, { balance: firebase.firestore.FieldValue.increment(-old.amount) });
+    }
   }
 
   var tRef = wsRef.collection("transactions").doc(String(editingId));
@@ -1268,11 +1327,12 @@ function payFixedExpense(id) {
     batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-fx.amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
   }
   
-  syncStatus('saving');
+  if(isSaving) return;
+  isSaving = true; syncStatus('saving');
   batch.commit().then(() => {
-    syncStatus('ok'); toast('✓ Gasto pagado exitosamente');
+    isSaving = false; syncStatus('ok'); toast('✓ Gasto pagado exitosamente');
   }).catch(err => {
-    syncStatus('err'); toast('⚠️ '+err.message);
+    isSaving = false; syncStatus('err'); toast('⚠️ '+err.message);
   });
 }
 
@@ -1396,12 +1456,13 @@ function processDebtPayment() {
     batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
   }
   
-  syncStatus('saving');
+  if(isSaving) return;
+  isSaving = true; syncStatus('saving');
   batch.commit().then(() => {
-    syncStatus('ok'); toast('✓ Abono registrado');
+    isSaving = false; syncStatus('ok'); toast('✓ Abono registrado');
     closeDebtPayModal();
   }).catch(err => {
-    syncStatus('err'); toast('⚠️ '+err.message);
+    isSaving = false; syncStatus('err'); toast('⚠️ '+err.message);
   });
 }
 
@@ -1517,7 +1578,7 @@ function openInstPayModal(id) {
   document.getElementById('ip-amount').value = '';
   document.getElementById('ip-amount-fmt').textContent = '';
   var wHtml = '';
-  Object.keys(state.accounts).forEach(k => { wHtml += '<option value="'+k+'">'+(ACC_LABELS[k]||k)+'</option>'; });
+  state.wallets.filter(w => w.status !== 'archived').forEach(w => { wHtml += '<option value="'+w.id+'">'+w.name+'</option>'; });
   document.getElementById('ip-wallet').innerHTML = wHtml;
   document.getElementById('inst-pay-modal').classList.add('open');
 }
@@ -1549,12 +1610,13 @@ function processInstPayment() {
   var wRef = wsRef.collection("wallets").doc(wallet);
   batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amount), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
   
-  syncStatus('saving');
+  if(isSaving) return;
+  isSaving = true; syncStatus('saving');
   batch.commit().then(() => {
-    syncStatus('ok'); toast('✓ Pago registrado');
+    isSaving = false; syncStatus('ok'); toast('✓ Pago registrado');
     closeInstPayModal();
   }).catch(err => {
-    syncStatus('err'); toast('⚠️ '+err.message);
+    isSaving = false; syncStatus('err'); toast('⚠️ '+err.message);
   });
 }
 
@@ -1605,11 +1667,11 @@ function renderOnboardingChecklist() {
    var hasCard = state.instruments && state.instruments.length > 0;
    
    var steps = [
-      { id: 'wallet', label: 'Crea tu primera cuenta', done: hasWallet, action: 'openWalletCrudModal()' },
-      { id: 'income', label: 'Registra un ingreso inicial', done: hasIncome, action: 'document.getElementById(\'nav-nuevo\').click(); setType(\'ingreso\');' },
-      { id: 'expense', label: 'Registra tu primer gasto', done: hasExpense, action: 'document.getElementById(\'nav-nuevo\').click(); setType(\'egreso\');' },
-      { id: 'fixed', label: 'Agrega un gasto fijo', done: hasFixed, action: 'document.getElementById(\'nav-fijos\').click()' },
-      { id: 'card', label: 'Agrega una tarjeta', done: hasCard, action: 'document.getElementById(\'nav-instrumentos\').click()' }
+      { id: 'wallet', label: 'Crea tu primera cuenta', done: hasWallet, action: 'openWalletCrudModal(null)' },
+      { id: 'income', label: 'Registra un ingreso inicial', done: hasIncome, action: 'showTab(\'nuevo\'); setType(\'ingreso\');' },
+      { id: 'expense', label: 'Registra tu primer gasto', done: hasExpense, action: 'showTab(\'nuevo\'); setType(\'egreso\');' },
+      { id: 'fixed', label: 'Agrega un gasto fijo', done: hasFixed, action: 'showTab(\'compromisos\');' },
+      { id: 'card', label: 'Agrega una tarjeta', done: hasCard, action: 'openInstModal(null);' }
    ];
    
    var total = steps.length;
@@ -1645,6 +1707,48 @@ function renderOnboardingChecklist() {
    
    html += '</div></div>';
    el.innerHTML = html;
+}
+
+// ── HOME MODULAR WIDGET RENDERERS ──
+function renderHomeMetas() {
+  var el = document.getElementById('widget-metas');
+  if(!el) return;
+  var active = (state.goals||[]).filter(function(g){ return (g.saved||0) < g.target; });
+  var inner = active.length ? active.slice(0,3).map(function(g) {
+    var pct = Math.min(Math.round(((g.saved||0)/g.target)*100), 100);
+    return '<div style="margin-bottom:12px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:5px">' +
+        '<span style="font-weight:500">' + g.name + '</span>' +
+        '<span style="color:var(--text3);font-family:\'DM Mono\',monospace;font-size:11px">' + pct + '%</span>' +
+      '</div>' +
+      '<div class="goal-bar-bg"><div class="goal-bar-fill" style="width:'+pct+'%;background:'+(pct>=100?'var(--green)':'var(--blue)')+';"></div></div>' +
+    '</div>';
+  }).join('') : '<div class="empty" style="padding:12px 0">No hay metas activas</div>';
+  el.innerHTML = '<div class="card" style="margin-top:16px"><div class="card-header" style="margin-bottom:14px">🎯 Metas activas</div>' + inner + '</div>';
+}
+
+function renderHomeAhorro() {
+  var el = document.getElementById('widget-ahorro');
+  if(!el) return;
+  var month = getActivePeriodTransactions();
+  var ing = month.filter(function(t){ return t.type==='ingreso'; }).reduce(function(a,t){ return a+t.amount; }, 0);
+  var totalFijos = (state.fixedExpenses||[]).filter(function(f){ return f.status!=='archived'; }).reduce(function(a,f){ return a+f.amount; }, 0);
+  var ahorro = ing - totalFijos;
+  var pct = ing > 0 ? Math.max(0, Math.round((ahorro/ing)*100)) : 0;
+  var color = ahorro >= 0 ? 'var(--green)' : 'var(--red)';
+  el.innerHTML = '<div class="card" style="margin-top:16px">' +
+    '<div class="card-header" style="margin-bottom:12px">💸 Capacidad de ahorro</div>' +
+    '<div style="display:flex;justify-content:space-between;align-items:center">' +
+      '<div>' +
+        '<div style="font-size:21px;font-weight:600;font-family:\'DM Mono\',monospace;letter-spacing:-1px;color:'+color+'">' + fmt(Math.max(ahorro,0)) + '</div>' +
+        '<div style="font-size:11px;color:var(--text3);margin-top:3px">Ingresos menos gastos fijos</div>' +
+      '</div>' +
+      '<div style="text-align:right">' +
+        '<div style="font-size:26px;font-weight:700;color:'+color+'">' + pct + '%</div>' +
+        '<div style="font-size:10px;color:var(--text3)">del ingreso</div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
 }
 
 function renderAll() {
@@ -1739,7 +1843,7 @@ function renderAll() {
     else {
       var catSums={};
       egs.forEach(function(t){
-        var c=t.categoria||'otro';
+        var c=t.cat||'otro';
         catSums[c]=(catSums[c]||0)+t.amount;
       });
       catArr=Object.keys(catSums).map(function(k){
@@ -1794,6 +1898,8 @@ function renderAll() {
   
   renderWalletsRow();
   renderFijos();
+  renderHomeMetas();
+  renderHomeAhorro();
 }
 
 function renderMovimientos() {

@@ -156,3 +156,17 @@ input:focus,select:focus,textarea:focus{border-color:var(--text)}
 .badge-overdue { background:var(--red-bg); color:var(--red); }
 .badge-paid { background:var(--green-bg); color:var(--green); }
 .badge-archived { background:var(--surface2); color:var(--text3); text-decoration:line-through; }
+
+/* ── HOME MODULAR — Widget Toggles ── */
+.widget-toggle-item{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border)}
+.widget-toggle-item:last-child{border-bottom:none}
+.wt-icon{font-size:20px;width:28px;text-align:center;flex-shrink:0}
+.wt-info{flex:1;min-width:0}
+.wt-name{font-size:14px;font-weight:500;color:var(--text)}
+.wt-desc{font-size:11px;color:var(--text3);margin-top:1px;line-height:1.4}
+.toggle-switch{position:relative;display:inline-block;width:46px;height:26px;flex-shrink:0}
+.toggle-switch input{opacity:0;width:0;height:0;position:absolute}
+.toggle-slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:var(--border2);border-radius:26px;transition:background .2s}
+.toggle-slider:before{position:absolute;content:"";height:20px;width:20px;left:3px;bottom:3px;background:var(--surface);border-radius:50%;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
+input:checked + .toggle-slider{background:var(--green)}
+input:checked + .toggle-slider:before{transform:translateX(20px)}
