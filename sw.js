@@ -25,3 +25,20 @@ self.addEventListener('fetch', function(e){
     })
   );
 });
+
+// Push (listo para conectar FCM/VAPID: el servidor envía {title, body})
+self.addEventListener('push', function(e){
+  var data = {};
+  try { data = e.data ? e.data.json() : {}; } catch(err) { data = {}; }
+  var title = data.title || 'MoneyFlow';
+  var options = { body: data.body || '', icon: data.icon || '' };
+  e.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', function(e){
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window' }).then(function(list){
+    for (var i = 0; i < list.length; i++) { if ('focus' in list[i]) return list[i].focus(); }
+    if (self.clients.openWindow) return self.clients.openWindow('./index.html');
+  }));
+});

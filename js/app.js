@@ -159,6 +159,22 @@ function initDarkMode() {
   } catch(e) {}
 }
 
+function notify(title, body) {
+  try {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body: body });
+    }
+  } catch(e) {}
+}
+
+function requestNotifications() {
+  if (!('Notification' in window)) { toast('Este navegador no soporta notificaciones'); return; }
+  if (Notification.permission === 'granted') { toast('✅ Notificaciones ya activadas'); return; }
+  Notification.requestPermission().then(function(p){
+    toast(p === 'granted' ? '✅ Notificaciones activadas' : 'Notificaciones no permitidas');
+  });
+}
+
 var ACC_LABELS = {milo:'Cuenta Milo',sari:'Cuenta Sari',cash:'Caja fuerte'};
 var CAT_LABELS = {vivienda:'Vivienda',mercado:'Mercado',transporte:'Transporte',salud:'Salud',educacion:'Educación',entretenimiento:'Entretenimiento',ropa:'Ropa',servicios:'Servicios',tecnologia:'Tecnología',negocio:'Click and Roll',ahorro:'Ahorro',tc:'Tarjeta crédito',otro:'Otro'};
 var CAT_COLORS = {vivienda:'#378ADD',mercado:'#1D9E75',transporte:'#BA7517',salud:'#D4537E',educacion:'#534AB7',entretenimiento:'#D85A30',ropa:'#993C1D',servicios:'#639922',tecnologia:'#185FA5',negocio:'#3B6D11',ahorro:'#0F6E56',tc:'#8B3A62',otro:'#888780'};
@@ -264,6 +280,7 @@ var editingDebtId = null;
 var payingDebtId = null;
 var editingInstId = null;
 var payingGoalId = null;
+var editingGoalId = null;
 var analysisRange = 'month';
 var payingInstId = null;
 var editingWalletId = null;
@@ -744,7 +761,7 @@ function startListeners() {
     let goals = [];
     snap.forEach(doc => {
       const d = doc.data();
-      goals.push({ id: parseInt(doc.id), name: d.name, target: d.target, saved: d.saved });
+      goals.push({ id: parseInt(doc.id), name: d.name, target: d.target, saved: d.saved, status: d.status || 'active', realizacion: d.realizacion || null });
     });
     state.goals = goals;
     renderGoals();
@@ -1421,21 +1438,77 @@ function deleteFromModal() {
   });
 }
 
+function resetGoalForm() {
+  document.getElementById('g-name').value='';
+  document.getElementById('g-target').value=''; document.getElementById('g-target-fmt').textContent='';
+  document.getElementById('g-saved').value=''; document.getElementById('g-saved-fmt').textContent='';
+  document.getElementById('goal-form-title').textContent = 'Nueva meta de ahorro';
+  document.getElementById('goal-form-btn').textContent = 'Crear meta';
+  editingGoalId = null;
+}
+
+function openGoalEdit(id) {
+  var g = state.goals.find(function(x){ return x.id === id; });
+  if(!g) return;
+  editingGoalId = id;
+  document.getElementById('g-name').value = g.name;
+  document.getElementById('g-target').value = String(Math.round(g.target||0));
+  document.getElementById('g-target-fmt').textContent = '$ ' + Math.round(g.target||0).toLocaleString('es-CO');
+  document.getElementById('g-saved').value = String(Math.round(g.saved||0));
+  document.getElementById('g-saved-fmt').textContent = '$ ' + Math.round(g.saved||0).toLocaleString('es-CO');
+  document.getElementById('goal-form-title').textContent = 'Editar meta';
+  document.getElementById('goal-form-btn').textContent = 'Guardar cambios';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function saveGoal() {
   var name=document.getElementById('g-name').value.trim();
   var target=getRawAmount('g-target');
   var saved=getRawAmount('g-saved');
   if(!name||!target||target<=0){alert('Completa nombre y monto objetivo');return;}
   
-  var gId = String(Date.now());
-  var gRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(gId);
-  gRef.set({ name: name, target: target, saved: saved, status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp() })
-  .then(() => {
-    document.getElementById('g-name').value='';
-    document.getElementById('g-target').value=''; document.getElementById('g-target-fmt').textContent='';
-    document.getElementById('g-saved').value=''; document.getElementById('g-saved-fmt').textContent='';
-    toast('✓ Meta creada');
+  if(editingGoalId) {
+    var gRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(String(editingGoalId));
+    gRef.update({ name: name, target: target, saved: saved, updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
+    .then(function(){ resetGoalForm(); toast('✓ Meta actualizada'); })
+    .catch(function(err){ toast('⚠️ ' + err.message); });
+  } else {
+    var gId = String(Date.now());
+    var gRef2 = db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(gId);
+    gRef2.set({ name: name, target: target, saved: saved, status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp() })
+    .then(function(){ resetGoalForm(); toast('✓ Meta creada'); })
+    .catch(function(err){ toast('⚠️ ' + err.message); });
+  }
+}
+
+function completarMeta(id) {
+  var g = state.goals.find(function(x){ return x.id === id; });
+  if(!g) return;
+  var tipo = confirm('¿Completar la meta "' + g.name + '"?\n\nAceptar = Sumar al patrimonio (activo)\nCancelar = Se gastó (no suma)') ? 'activo' : 'gasto';
+  var amt = g.saved || 0;
+  var wallet = defaultWalletId || 'milo';
+  var batch = db.batch();
+  var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+  var gRef = wsRef.collection("goals").doc(String(id));
+  batch.update(gRef, {
+    status: 'completed', realizacion: tipo,
+    completedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
+  if (amt > 0) {
+    var wRef = wsRef.collection("wallets").doc(wallet);
+    batch.update(wRef, { balance: firebase.firestore.FieldValue.increment(-amt), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    var tRef = wsRef.collection("transactions").doc(String(Date.now()));
+    batch.set(tRef, {
+      type: 'egreso', amount: amt, description: 'Meta completada: ' + g.name, date: todayStr(),
+      walletId: wallet, instrumentId: null, destinationWalletId: null,
+      categoryId: 'ahorro', entityId: null,
+      status: "completed", origin: "goalComplete", commitmentId: String(id),
+      isNeutral: true,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
+    });
+  }
+  batch.commit().then(function(){ toast(tipo === 'activo' ? '✓ Meta completada (activo)' : '✓ Meta completada'); })
+    .catch(function(err){ toast('⚠️ ' + err.message); });
 }
 
 function deleteGoal(id) {
@@ -2020,7 +2093,7 @@ function txnHTML(t,showEdit) {
   var catL = !isTr && !isCc && t.cat ? ' · '+(CAT_LABELS[t.cat]||t.cat) : '';
   if (entName && !isTr && !isCc) catL = ' · ' + entName + catL;
 
-  var originMap = { 'fixedExpense':'Fijo','debtPayment':'Deuda','ccPayment':'Tarjeta','loanDisbursement':'Préstamo','loanLending':'Préstamo','migration':'Migrado','system':'Sistema' };
+  var originMap = { 'fixedExpense':'Fijo','debtPayment':'Deuda','ccPayment':'Tarjeta','loanDisbursement':'Préstamo','loanLending':'Préstamo','goalComplete':'Meta','migration':'Migrado','system':'Sistema' };
   var oBadge = (t.origin && originMap[t.origin]) ? ' <span style="font-size:10px;font-weight:600;color:var(--text3);border:1px solid var(--border);padding:1px 6px;border-radius:8px">'+originMap[t.origin]+'</span>' : '';
   var neutralNote = t.isNeutral ? ' <span style="font-size:10px;color:var(--text3)">· no cuenta en totales</span>' : '';
 
@@ -2157,11 +2230,15 @@ function totalCardDebt() {
 }
 
 function netWorth() {
-  return totalLiquid() + totalReceivables() - totalDebtLiabilities() - totalCardDebt();
+  return totalLiquid() + totalAssets() + totalReceivables() - totalDebtLiabilities() - totalCardDebt();
 }
 
 function totalReserved() {
-  return (state.goals||[]).filter(function(g){ return g.status !== 'archived'; }).reduce(function(a,g){ return a + (g.saved||0); }, 0);
+  return (state.goals||[]).filter(function(g){ return g.status !== 'archived' && g.status !== 'completed'; }).reduce(function(a,g){ return a + (g.saved||0); }, 0);
+}
+
+function totalAssets() {
+  return (state.goals||[]).filter(function(g){ return g.status === 'completed' && g.realizacion === 'activo'; }).reduce(function(a,g){ return a + (g.saved||0); }, 0);
 }
 
 function totalDebt() {
@@ -2358,9 +2435,16 @@ function renderGoals() {
   if(!state.goals||!state.goals.length){el.innerHTML='<div class="empty">Aún no hay metas</div>';return;}
   var endStr = getPeriodEndStr();
   el.innerHTML=state.goals.map(function(g){
-    var saved = g.saved; // Should this be computed dynamically? Assuming yes for v2, but for now we leave it since goals haven't been migrated yet to dynamic txns in our context. Or actually, the prompt says "metas acumuladas" depend on period active. But there are no transactions with origin="goal" yet. Let's leave g.saved for now.
+    if(g.status === 'completed') {
+      var badge = g.realizacion === 'activo' ? '<span class="badge-status badge-paid">Activo</span>' : '<span class="badge-status badge-archived">Se gastó</span>';
+      return '<div class="goal-card" style="opacity:0.7"><div style="display:flex;justify-content:space-between;align-items:start"><div><div class="goal-name">✓ '+g.name+'</div><div class="goal-sub">Completada · '+ (g.realizacion === 'activo' ? 'Sumada al patrimonio' : 'Se gastó') +'</div></div><button class="icon-btn del" onclick="deleteGoal('+g.id+')" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button></div><div class="goal-footer"><span>Ahorrado: <strong>'+fmt(g.saved||0)+'</strong></span>'+badge+'</div></div>';
+    }
+    var saved = g.saved || 0;
     var pct=Math.min(Math.round(saved/g.target*100),100),done=pct>=100;
-    return '<div class="goal-card"><div style="display:flex;justify-content:space-between;align-items:start"><div><div class="goal-name">'+(done?'✓ ':'')+g.name+'</div><div class="goal-sub">'+(done?'¡Meta alcanzada!':'Faltan '+fmt(g.target-g.saved))+'</div></div><button class="icon-btn del" onclick="deleteGoal('+g.id+')" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button></div><div class="goal-bar-bg"><div class="goal-bar-fill" style="width:'+pct+'%;background:'+(done?'var(--green)':'var(--blue)')+'"></div></div><div class="goal-footer"><span>Ahorrado: <strong>'+fmt(g.saved)+'</strong></span><strong>'+pct+'%</strong><span>Meta: <strong>'+fmt(g.target)+'</strong></span></div>'+(done?'':'<div style="margin-top:10px"><button class="btn-outline" style="width:100%;font-size:13px" onclick="openGoalPayModal('+g.id+')">+ Abonar a esta meta</button></div>')+'</div>';
+    var actionBtn = done
+      ? '<button class="btn" style="width:100%;font-size:13px;margin-bottom:6px" onclick="completarMeta('+g.id+')">✓ Completar meta</button>'
+      : '<button class="btn-outline" style="width:100%;font-size:13px" onclick="openGoalPayModal('+g.id+')">+ Abonar a esta meta</button>';
+    return '<div class="goal-card"><div style="display:flex;justify-content:space-between;align-items:start"><div><div class="goal-name">'+g.name+'</div><div class="goal-sub">'+(done?'¡Meta alcanzada!':'Faltan '+fmt(g.target-saved))+'</div></div><div style="display:flex"><button class="icon-btn edit" onclick="openGoalEdit('+g.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button><button class="icon-btn del" onclick="deleteGoal('+g.id+')" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button></div></div><div class="goal-bar-bg"><div class="goal-bar-fill" style="width:'+pct+'%;background:'+(done?'var(--green)':'var(--blue)')+'"></div></div><div class="goal-footer"><span>Ahorrado: <strong>'+fmt(saved)+'</strong></span><strong>'+pct+'%</strong><span>Meta: <strong>'+fmt(g.target)+'</strong></span></div><div style="margin-top:10px">'+actionBtn+'</div></div>';
   }).join('');
 }
 
