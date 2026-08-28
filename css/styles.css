@@ -170,3 +170,51 @@ input:focus,select:focus,textarea:focus{border-color:var(--text)}
 .toggle-slider:before{position:absolute;content:"";height:20px;width:20px;left:3px;bottom:3px;background:var(--surface);border-radius:50%;transition:transform .2s;box-shadow:0 1px 3px rgba(0,0,0,.2)}
 input:checked + .toggle-slider{background:var(--green)}
 input:checked + .toggle-slider:before{transform:translateX(20px)}
+
+/* ═══════════════════════════════════════════════
+   PREMIUM POLISH — jerarquía visual y micro-detalles
+   ═══════════════════════════════════════════════ */
+
+/* Héroe: número principal más grande y enfocado */
+.total-display{font-size:30px;font-weight:500;letter-spacing:-1.5px;line-height:1.05}
+.total-label{font-weight:600;letter-spacing:.7px}
+
+/* Header con elevación sutil */
+.app-header{box-shadow:0 1px 0 var(--border),0 6px 20px -12px rgba(0,0,0,.12)}
+
+/* Tarjetas: radio más suave + elevación */
+.card,.goal-card,.summary-bar,.metric-card{border-radius:16px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 3px 8px -3px rgba(0,0,0,.06)}
+
+/* Botón primario refinado */
+.btn-save{border-radius:12px;transition:transform .06s ease,opacity .2s}
+.btn-save:active{transform:scale(.985);opacity:.85}
+
+/* Bottom nav: activo con acento */
+.btab{transition:color .2s}
+.btab.active{color:var(--blue);font-weight:600}
+.btab-dot{background:var(--blue)}
+
+/* Inputs: radio suave + anillo de foco */
+input[type=text],input[type=number],input[type=date],select,textarea{border-radius:12px;transition:border-color .2s,box-shadow .2s}
+input:focus,select:focus,textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-bg)}
+
+/* Chips de cuentas más pulidos */
+.acc-chip{box-shadow:0 1px 2px rgba(0,0,0,.04)}
+
+/* Transiciones suaves */
+.icon-btn,.seg-btn,.modal-close,.btn-outline{transition:all .15s ease}
+.btn-outline:active{transform:scale(.98)}
+
+/* Segmented control */
+.seg-btn.active{box-shadow:0 1px 3px rgba(0,0,0,.1)}
+
+/* Badges redondeados */
+.badge{border-radius:8px}
+
+/* Encabezados de tarjeta con más aire */
+.card-header{letter-spacing:.7px}
+
+/* Modo oscuro manual */
+body.dark{--bg:#111110;--surface:#1C1B19;--surface2:#262521;--border:rgba(255,255,255,.07);--border2:rgba(255,255,255,.15);--text:#F0EDE6;--text2:#9A9790;--text3:#6B6760;--green:#2ECC7F;--green-bg:#0D2B1E;--red:#E85D4A;--red-bg:#2B1010;--blue:#5B9EF4;--blue-bg:#0E1E36;--pink:#D47DAD;--pink-bg:#2A1020;--gold:#D4A84B;--gold-bg:#2A2008;--orange:#F4845F;--orange-bg:#2B150A}
+body.dark .btn-save{background:var(--text);color:#111110;border-color:var(--text)}
+body.dark .fixed-check{border-color:var(--border2)}

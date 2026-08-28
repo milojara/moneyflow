@@ -12,9 +12,152 @@ if (!firebase.apps.length) {
 var db = firebase.firestore();
 var auth = firebase.auth();
 
-// Constantes de Fase 1 (Autenticación e Identidad)
-const DEV_USER_ID = "hccreativo_uid"; 
-const WORKSPACE_ID = "workspace_hccreativo";
+// ============================================================
+//  AUTENTICACIÓN E IDENTIDAD — Bloque 1A
+//  Reemplaza las líneas:
+//    const DEV_USER_ID = "hccreativo_uid";
+//    const WORKSPACE_ID = "workspace_hccreativo";
+//  por TODO este bloque.
+// ============================================================
+
+// Ahora son variables (no constantes) porque dependen del usuario que entra
+var CURRENT_USER = null;        // el usuario autenticado
+var WORKSPACE_ID = null;        // el espacio activo (se define tras login)
+var DEV_USER_ID  = null;        // uid del usuario actual (compatibilidad con código viejo)
+
+// --- Portón de autenticación: la app NO arranca sin sesión ---
+auth.onAuthStateChanged(async function (user) {
+  const authScreen = document.getElementById('auth-screen');
+  if (user) {
+    CURRENT_USER = user;
+    DEV_USER_ID = user.uid;
+    // asegura que el usuario tenga su documento y su espacio personal
+    WORKSPACE_ID = await ensureUserSpace(user);
+    authScreen.style.display = 'none';
+    init();  // arranca la app real (ya existía)
+  } else {
+    CURRENT_USER = null;
+    authScreen.style.display = 'flex';
+    document.getElementById('loading').classList.add('hidden');
+  }
+});
+
+// --- Crea el usuario + su espacio personal la primera vez ---
+async function ensureUserSpace(user) {
+  const userRef = db.collection("users").doc(user.uid);
+  const userSnap = await userRef.get();
+
+  if (!userSnap.exists) {
+    // primer ingreso: crear su espacio personal
+    const wsRef = db.collection("workspaces").doc();
+    const wsId = wsRef.id;
+    await wsRef.set({
+      name: "Mis finanzas",
+      owner: user.uid,
+      members: { [user.uid]: "owner" },
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    await userRef.set({
+      email: user.email,
+      name: user.displayName || user.email.split('@')[0],
+      photo: user.photoURL || "",
+      workspaces: [wsId],
+      activeWorkspace: wsId,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    return wsId;
+  } else {
+    // ya existe: usar su espacio activo
+    const data = userSnap.data();
+    return data.activeWorkspace || (data.workspaces && data.workspaces[0]);
+  }
+}
+
+// --- Botones de la pantalla de login ---
+function wireAuthButtons() {
+  const err = document.getElementById('auth-error');
+  const showErr = (m) => { err.textContent = m; };
+
+  document.getElementById('btn-google').onclick = async () => {
+    showErr('');
+    try {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      await auth.signInWithPopup(provider);
+    } catch (e) { showErr('No se pudo entrar con Google. Intenta de nuevo.'); }
+  };
+
+  document.getElementById('btn-login').onclick = async () => {
+    showErr('');
+    const email = document.getElementById('auth-email').value.trim();
+    const pass = document.getElementById('auth-pass').value;
+    if (!email || !pass) { showErr('Completa correo y contraseña.'); return; }
+    try {
+      await auth.signInWithEmailAndPassword(email, pass);
+    } catch (e) { showErr('Correo o contraseña incorrectos.'); }
+  };
+
+  document.getElementById('btn-register').onclick = async () => {
+    showErr('');
+    const email = document.getElementById('auth-email').value.trim();
+    const pass = document.getElementById('auth-pass').value;
+    if (!email || !pass) { showErr('Escribe correo y contraseña para crear tu cuenta.'); return; }
+    if (pass.length < 6) { showErr('La contraseña debe tener al menos 6 caracteres.'); return; }
+    try {
+      await auth.createUserWithEmailAndPassword(email, pass);
+    } catch (e) {
+      if (e.code === 'auth/email-already-in-use') showErr('Ese correo ya está registrado. Intenta entrar.');
+      else showErr('No se pudo crear la cuenta. Revisa el correo.');
+    }
+  };
+}
+wireAuthButtons();
+initDarkMode();
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function(){
+    navigator.serviceWorker.register('sw.js').catch(function(){});
+  });
+}
+
+// --- Cerrar sesión (para usar en un botón dentro de la app) ---
+function cerrarSesion() { auth.signOut(); }
+
+function exportData() {
+  var data = {
+    app: 'MoneyFlow',
+    exportedAt: new Date().toISOString(),
+    workspaceId: WORKSPACE_ID,
+    wallets: state.wallets,
+    transactions: state.transactions,
+    debts: state.debts,
+    fixedExpenses: state.fixedExpenses,
+    goals: state.goals,
+    instruments: state.instruments,
+    categories: state.categories,
+    entities: state.entities
+  };
+  var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'moneyflow-backup-' + todayStr() + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('✓ Datos exportados');
+}
+
+function toggleDark() {
+  var dark = document.body.classList.toggle('dark');
+  try { localStorage.setItem('mf-dark', dark ? '1' : '0'); } catch(e) {}
+  toast(dark ? '🌙 Modo oscuro activado' : '☀️ Modo claro');
+}
+
+function initDarkMode() {
+  try {
+    if (localStorage.getItem('mf-dark') === '1') document.body.classList.add('dark');
+  } catch(e) {}
+}
 
 var ACC_LABELS = {milo:'Cuenta Milo',sari:'Cuenta Sari',cash:'Caja fuerte'};
 var CAT_LABELS = {vivienda:'Vivienda',mercado:'Mercado',transporte:'Transporte',salud:'Salud',educacion:'Educación',entretenimiento:'Entretenimiento',ropa:'Ropa',servicios:'Servicios',tecnologia:'Tecnología',negocio:'Click and Roll',ahorro:'Ahorro',tc:'Tarjeta crédito',otro:'Otro'};
@@ -74,6 +217,38 @@ function getActivePeriodTransactions() {
   });
 }
 
+function getWeekSpend(offsetWeeks) {
+  var now = new Date();
+  var day = now.getDay();
+  var sinceMonday = (day === 0 ? 6 : day - 1);
+  var start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - sinceMonday - (offsetWeeks * 7));
+  start.setHours(0,0,0,0);
+  var end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+  return state.transactions.filter(function(t){
+    var d = new Date(t.date + 'T12:00:00');
+    return d >= start && d < end && t.type === 'egreso' && !t.isNeutral;
+  }).reduce(function(a,t){ return a + t.amount; }, 0);
+}
+
+function getAnalysisTransactions() {
+  if (analysisRange === 'all') return state.transactions;
+  if (analysisRange === 'year') {
+    return state.transactions.filter(function(t){
+      var d = new Date(t.date + 'T12:00:00');
+      return d.getFullYear() === state.activePeriod.year;
+    });
+  }
+  return getActivePeriodTransactions();
+}
+
+function setAnalysisRange(r) {
+  analysisRange = r;
+  document.getElementById('arange-m').classList.toggle('active', r === 'month');
+  document.getElementById('arange-y').classList.toggle('active', r === 'year');
+  document.getElementById('arange-a').classList.toggle('active', r === 'all');
+  renderAll();
+}
+
 var defaultWalletId = null;
 var txnType = 'ingreso';
 var editType = 'ingreso';
@@ -88,6 +263,8 @@ var debtType = 'to_pay';
 var editingDebtId = null;
 var payingDebtId = null;
 var editingInstId = null;
+var payingGoalId = null;
+var analysisRange = 'month';
 var payingInstId = null;
 var editingWalletId = null;
 var archivingWalletId = null;
@@ -256,6 +433,47 @@ function toast(msg) {
 
 function fmt(n) { return '$'+Math.round(n||0).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'.'); }
 
+// ── AUTO-CATEGORIZACIÓN DE COMERCIOS (Bloque 2A) ──
+var MERCHANT_RULES = [
+  { kws: ['uber','didi','cabify','indriver','in driver','taxi','transmilenio','sitp','grab'], cat: 'transporte' },
+  { kws: ['d1','tiendas d1','exito','éxito','carulla','olimpica','olímpica','jumbo','ara ','supermercado','mercado','justo'], cat: 'mercado' },
+  { kws: ['rappi','ifood','domicilio','pedidos'], cat: 'mercado' },
+  { kws: ['netflix','spotify','disney','hbo','cine','youtube premium','star+'], cat: 'entretenimiento' },
+  { kws: ['arriendo','arrendamiento','renta','canon','canón','administracion','administración'], cat: 'vivienda' },
+  { kws: ['eps','salud','medico','médico','farmacia','drogueria','droguería','clinica','clínica','odontologo','odontólogo'], cat: 'salud' },
+  { kws: ['colegio','universidad','curso','udemy','matricula','matrícula','jardin','jardín'], cat: 'educacion' },
+  { kws: ['ropa','zara','h&m','studio f','falabella','pull&bear','bata','zapatos','tenis'], cat: 'ropa' },
+  { kws: ['luz','agua','gas','internet','claro','tigo','movistar','celular','recibo','factura','wifi'], cat: 'servicios' },
+  { kws: ['apple','steam','amazon','mercado libre','tecnologia','tecnología','computador','iphone','samsung','xiaomi'], cat: 'tecnologia' }
+];
+
+function autoCategorize(desc) {
+  if(!desc) return null;
+  var d = desc.toLowerCase();
+  for(var i=0;i<MERCHANT_RULES.length;i++){
+    var kws = MERCHANT_RULES[i].kws;
+    for(var j=0;j<kws.length;j++){
+      if(d.indexOf(kws[j]) !== -1) return MERCHANT_RULES[i].cat;
+    }
+  }
+  return null;
+}
+
+function wireAutoCategorize() {
+  var fDesc = document.getElementById('f-desc');
+  var eDesc = document.getElementById('e-desc');
+  if(fDesc) fDesc.addEventListener('input', function(){
+    if(txnType !== 'egreso') return;
+    var cat = autoCategorize(fDesc.value);
+    if(cat) document.getElementById('f-cat').value = cat;
+  });
+  if(eDesc) eDesc.addEventListener('input', function(){
+    if(editType !== 'egreso') return;
+    var cat = autoCategorize(eDesc.value);
+    if(cat) document.getElementById('e-cat').value = cat;
+  });
+}
+
 // ── HOME MODULAR CONFIG ──
 function applyHomeConfig() {
   var widgets = {
@@ -377,11 +595,10 @@ async function migrateToV1() {
 
 // ── FIREBASE INIT ──
 async function init() {
-  var ml = document.getElementById('month-label');
-  if (ml) ml.textContent = MONTHS[new Date().getMonth()]+' '+new Date().getFullYear();
   var fml = document.getElementById('fijos-month-label');
   if (fml) fml.textContent = MONTHS[new Date().getMonth()]+' '+new Date().getFullYear();
   setDate();
+  wireAutoCategorize();
 
   const migrationSuccess = await migrateToV1();
   if (migrationSuccess) {
@@ -397,6 +614,7 @@ function startListeners() {
   wsRef.onSnapshot(snap => {
     if(snap.exists) {
       workspaceSettings = snap.data().settings || {};
+      document.title = (snap.data().name || 'MoneyFlow') + ' · MoneyFlow';
       var savedConfig = snap.data().homeConfig || {};
       Object.keys(homeConfig).forEach(function(k) {
         if(savedConfig[k] !== undefined) homeConfig[k] = savedConfig[k];
@@ -511,7 +729,8 @@ function startListeners() {
         id: parseInt(doc.id), type: d.type, desc: d.description, amount: d.amount,
         cuenta: d.walletId, instrumentId: d.instrumentId || null, destino: d.destinationWalletId, cat: d.categoryId, date: d.date,
         entityId: d.entityId || null,
-        origin: d.origin || null, commitmentId: d.commitmentId || null
+        origin: d.origin || null, commitmentId: d.commitmentId || null,
+        isNeutral: d.isNeutral || false
       });
     });
     txns.sort((a,b) => b.id - a.id);
@@ -530,6 +749,7 @@ function startListeners() {
     state.goals = goals;
     renderGoals();
     renderHomeMetas();
+    renderAll();
   });
   
   wsRef.collection("fixed_expenses").onSnapshot(snap => {
@@ -553,11 +773,13 @@ function startListeners() {
       const d = doc.data();
       dArr.push({ 
         id: parseInt(doc.id), name: d.name, initialAmount: d.initialAmount, type: d.type, 
-        entityId: d.entityId || null, status: d.status || 'active' 
+        entityId: d.entityId || null, status: d.status || 'active',
+        entregoDinero: d.entregoDinero || false, cuentaDestino: d.cuentaDestino || null
       });
     });
     state.debts = dArr;
     renderDebts();
+    renderAll();
   });
 
   wsRef.collection("instruments").onSnapshot(snap => {
@@ -569,6 +791,7 @@ function startListeners() {
     state.instruments = iArr;
     updateWalletSelects();
     renderInstruments();
+    renderAll();
   });
 }
 
@@ -1081,7 +1304,7 @@ function openEditModal(id) {
   document.getElementById('e-desc').value=t.desc;
   document.getElementById('e-amount').value=String(Math.round(t.amount));
   document.getElementById('e-amount-fmt').textContent='$ '+Math.round(t.amount).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'.');
-  document.getElementById('e-cuenta').value = t.instrumentId ? 'i_'+t.instrumentId : (t.cuenta || '');
+  document.getElementById('e-cuenta').value = t.instrumentId ? 'i_'+t.instrumentId : (t.cuenta ? 'w_'+t.cuenta : '');
   if(t.destino) document.getElementById('e-destino').value=t.destino;
   document.getElementById('e-cat').value=t.cat||'otro';
   document.getElementById('e-entidad').value=t.entityId||'';
@@ -1132,7 +1355,7 @@ function saveEdit() {
   var rawNewCuenta = document.getElementById('e-cuenta').value;
   var newDestino = document.getElementById('e-destino').value;
   var isNewInst = rawNewCuenta && rawNewCuenta.startsWith('i_');
-  var newCuentaId = isNewInst ? rawNewCuenta.substring(2) : rawNewCuenta;
+  var newCuentaId = isNewInst ? rawNewCuenta.substring(2) : (rawNewCuenta.startsWith('w_') ? rawNewCuenta.substring(2) : rawNewCuenta);
 
   if (!isNewInst) {
     var newWRef = wsRef.collection("wallets").doc(newCuentaId);
@@ -1220,12 +1443,29 @@ function deleteGoal(id) {
   db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(String(id)).delete().then(()=>{ toast('✓ Eliminada'); });
 }
 
-function addToGoal(id) {
-  var amt=parseFloat(prompt('¿Cuánto quieres abonar? (COP $)'));
-  if(!amt||amt<=0) return;
-  var gRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(String(id));
+function openGoalPayModal(id) {
+  payingGoalId = id;
+  var g = state.goals.find(function(x){ return x.id === id; });
+  if(!g) return;
+  document.getElementById('goal-pay-info').textContent = g.name + ' · Ahorrado: ' + fmt(g.saved||0) + ' de ' + fmt(g.target||0);
+  document.getElementById('gp-amount').value = '';
+  document.getElementById('gp-amount-fmt').textContent = '';
+  document.getElementById('goal-pay-modal').classList.add('open');
+}
+
+function closeGoalPayModal() {
+  document.getElementById('goal-pay-modal').classList.remove('open');
+  payingGoalId = null;
+}
+
+function processGoalPayment() {
+  if(!payingGoalId) return;
+  var amt = getRawAmount('gp-amount');
+  if(!amt || amt <= 0) { alert('Monto inválido'); return; }
+  var gRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("goals").doc(String(payingGoalId));
   gRef.update({ saved: firebase.firestore.FieldValue.increment(amt), updatedAt: firebase.firestore.FieldValue.serverTimestamp() })
-  .then(() => { toast('✓ Abono registrado'); });
+    .then(function(){ closeGoalPayModal(); toast('✓ Abono registrado'); })
+    .catch(function(err){ toast('⚠️ ' + err.message); });
 }
 
 // ── COMPROMISOS (GASTOS FIJOS) ──
@@ -1240,7 +1480,7 @@ function openFixedModal(id) {
       document.getElementById('fx-cat').value=fx.cat||'otro';
       document.getElementById('fx-entidad').value=fx.entityId||'';
       document.getElementById('fx-day').value=fx.dueDay||28;
-      document.getElementById('fx-wallet').value=fx.walletId||'milo';
+      document.getElementById('fx-wallet').value=(fx.walletId && fx.walletId.startsWith('i_')) ? fx.walletId : ('w_'+(fx.walletId||'milo'));
       document.getElementById('fixed-modal-title').textContent='Editar gasto fijo';
       document.getElementById('fixed-modal-btn').textContent='Guardar cambios';
     }
@@ -1251,7 +1491,7 @@ function openFixedModal(id) {
     document.getElementById('fx-cat').value='vivienda';
     document.getElementById('fx-entidad').value='';
     document.getElementById('fx-day').value='';
-    document.getElementById('fx-wallet').value='milo';
+    document.getElementById('fx-wallet').value='w_'+(defaultWalletId||'milo');
     document.getElementById('fixed-modal-title').textContent='Nuevo gasto fijo';
     document.getElementById('fixed-modal-btn').textContent='Agregar gasto fijo';
   }
@@ -1342,6 +1582,15 @@ function setDebtType(t) {
   document.getElementById('dseg-pay').classList.remove('active');
   document.getElementById('dseg-rec').classList.remove('active');
   document.getElementById(t === 'to_pay' ? 'dseg-pay' : 'dseg-rec').classList.add('active');
+  var isReceive = (t === 'to_receive');
+  document.getElementById('debt-entrega-group').style.display = 'block';
+  document.getElementById('d-entrega-label').textContent = isReceive ? 'Yo presté este dinero' : 'Este préstamo me entrega dinero';
+  document.getElementById('d-entrega-wallet-label').textContent = isReceive ? '¿De qué cuenta sale el dinero?' : '¿A qué cuenta entra el dinero?';
+  document.getElementById('d-entrega-hint').textContent = isReceive
+    ? 'El dinero saldrá de esta cuenta y nacerá el cobro por el mismo valor. Tu patrimonio no cambia (prestas plata pero te la deben).'
+    : 'El dinero entrará a esta cuenta y nacerá la deuda por el mismo valor. Tu patrimonio no cambia (recibes plata pero la debes).';
+  document.getElementById('d-entrega-check').checked = false;
+  document.getElementById('debt-entrega-wallet').style.display = 'none';
 }
 
 function openDebtModal(id) {
@@ -1354,6 +1603,12 @@ function openDebtModal(id) {
       document.getElementById('d-amount-fmt').textContent = '$ ' + Math.round(d.initialAmount).toLocaleString('es-CO');
       document.getElementById('d-entidad').value = d.entityId || '';
       setDebtType(d.type || 'to_pay');
+      if (d.entregoDinero) {
+        document.getElementById('d-entrega-check').checked = true;
+        llenarCuentasEntrega();
+        if (d.cuentaDestino) document.getElementById('d-entrega-cuenta').value = d.cuentaDestino;
+        document.getElementById('debt-entrega-wallet').style.display = 'block';
+      }
       document.getElementById('debt-modal-title').textContent = 'Editar Deuda';
       document.getElementById('debt-modal-btn').textContent = 'Guardar cambios';
     }
@@ -1374,6 +1629,28 @@ function closeDebtModal() {
   editingDebtId = null;
 }
 
+function toggleDebtEntrega() {
+  var checked = document.getElementById('d-entrega-check').checked;
+  var box = document.getElementById('debt-entrega-wallet');
+  box.style.display = checked ? 'block' : 'none';
+  if (checked) llenarCuentasEntrega();
+}
+
+function llenarCuentasEntrega() {
+  var sel = document.getElementById('d-entrega-cuenta');
+  sel.innerHTML = '';
+  var opt0 = document.createElement('option');
+  opt0.value = '';
+  opt0.textContent = 'Selecciona cuenta…';
+  sel.appendChild(opt0);
+  state.wallets.filter(function(w){ return w.status === 'active'; }).forEach(function(w){
+    var opt = document.createElement('option');
+    opt.value = w.id;
+    opt.textContent = w.name + ' (' + fmt(w.balance) + ')';
+    sel.appendChild(opt);
+  });
+}
+
 function saveDebt() {
   var name = document.getElementById('d-name').value.trim();
   var amount = getRawAmount('d-amount');
@@ -1382,21 +1659,112 @@ function saveDebt() {
   
   var dRef;
   if(editingDebtId) {
-    dRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("debts").doc(String(editingDebtId));
-    dRef.update({ 
-      name: name, initialAmount: amount, type: debtType, entityId: entidad || null, 
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp() 
-    }).then(() => {
+    var oldDebt = state.debts.find(function(x){ return x.id === editingDebtId; });
+    var oldMoved = !!(oldDebt && oldDebt.entregoDinero && oldDebt.cuentaDestino);
+    var entregaDinero = document.getElementById('d-entrega-check').checked;
+    var cuentaEntrega = document.getElementById('d-entrega-cuenta').value;
+    var isLending = (debtType === 'to_receive');
+    if (entregaDinero && !cuentaEntrega) {
+      alert(isLending ? 'Elige de qué cuenta sale el dinero.' : 'Elige a qué cuenta entra el dinero.');
+      return;
+    }
+
+    var batch = db.batch();
+    var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+
+    // 1. Revertir el movimiento anterior (si existía)
+    if (oldMoved) {
+      var oldIsLending = (oldDebt.type === 'to_receive');
+      var oldWRef = wsRef.collection("wallets").doc(oldDebt.cuentaDestino);
+      batch.update(oldWRef, {
+        balance: firebase.firestore.FieldValue.increment(oldIsLending ? oldDebt.initialAmount : -oldDebt.initialAmount),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      batch.delete(wsRef.collection("transactions").doc(String(editingDebtId) + "_loan"));
+    }
+
+    // 2. Actualizar la deuda
+    var dRef = wsRef.collection("debts").doc(String(editingDebtId));
+    batch.update(dRef, {
+      name: name, initialAmount: amount, type: debtType, entityId: entidad || null,
+      entregoDinero: entregaDinero ? true : false,
+      cuentaDestino: entregaDinero ? cuentaEntrega : null,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // 3. Aplicar el movimiento nuevo (si aplica)
+    if (entregaDinero && cuentaEntrega) {
+      var wRef = wsRef.collection("wallets").doc(cuentaEntrega);
+      batch.update(wRef, {
+        balance: firebase.firestore.FieldValue.increment(isLending ? -amount : amount),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      var tRef = wsRef.collection("transactions").doc(String(editingDebtId) + "_loan");
+      batch.set(tRef, {
+        type: isLending ? 'egreso' : 'ingreso', amount: amount,
+        description: isLending ? ('Préstamo otorgado: ' + name) : ('Préstamo recibido: ' + name),
+        date: (typeof todayStr === 'function' ? todayStr() : new Date().toISOString().slice(0,10)),
+        walletId: cuentaEntrega, instrumentId: null, destinationWalletId: null,
+        categoryId: 'otro', entityId: entidad || null,
+        status: "completed", origin: isLending ? "loanLending" : "loanDisbursement", commitmentId: String(editingDebtId),
+        isNeutral: true,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
+      });
+    }
+
+    batch.commit().then(function(){
       closeDebtModal(); toast('✓ Deuda actualizada');
-    });
+      document.getElementById('d-entrega-check').checked = false;
+      document.getElementById('debt-entrega-wallet').style.display = 'none';
+    }).catch(function(err){ toast('⚠️ ' + err.message); });
   } else {
-    dRef = db.collection("workspaces").doc(WORKSPACE_ID).collection("debts").doc(String(Date.now()));
-    dRef.set({ 
-      name: name, initialAmount: amount, type: debtType, entityId: entidad || null, 
-      status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp() 
-    }).then(() => {
-      closeDebtModal(); toast('✓ Deuda creada');
+    var debtId = String(Date.now());
+    var entregaDinero = document.getElementById('d-entrega-check').checked;
+    var cuentaEntrega = document.getElementById('d-entrega-cuenta').value;
+    var isLending = (debtType === 'to_receive');
+    if (entregaDinero && !cuentaEntrega) {
+      alert(isLending ? 'Elige de qué cuenta sale el dinero.' : 'Elige a qué cuenta entra el dinero.');
+      return;
+    }
+
+    var batch = db.batch();
+    var wsRef = db.collection("workspaces").doc(WORKSPACE_ID);
+
+    // 1. Crear la deuda
+    var dRef = wsRef.collection("debts").doc(debtId);
+    batch.set(dRef, {
+      name: name, initialAmount: amount, type: debtType, entityId: entidad || null,
+      status: "active", createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      entregoDinero: entregaDinero ? true : false,
+      cuentaDestino: entregaDinero ? cuentaEntrega : null
     });
+
+    // 2. Movimiento de dinero (entra si "Yo debo", sale si "Me deben")
+    if (entregaDinero && cuentaEntrega) {
+      var wRef = wsRef.collection("wallets").doc(cuentaEntrega);
+      batch.update(wRef, {
+        balance: firebase.firestore.FieldValue.increment(isLending ? -amount : amount),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      var txnId = debtId + "_loan";
+      var tRef = wsRef.collection("transactions").doc(txnId);
+      batch.set(tRef, {
+        type: isLending ? 'egreso' : 'ingreso', amount: amount,
+        description: isLending ? ('Préstamo otorgado: ' + name) : ('Préstamo recibido: ' + name),
+        date: (typeof todayStr === 'function' ? todayStr() : new Date().toISOString().slice(0,10)),
+        walletId: cuentaEntrega, instrumentId: null, destinationWalletId: null,
+        categoryId: 'otro', entityId: entidad || null,
+        status: "completed", origin: isLending ? "loanLending" : "loanDisbursement", commitmentId: debtId,
+        isNeutral: true,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
+      });
+    }
+
+    batch.commit().then(function(){
+      closeDebtModal(); toast('✓ Deuda creada');
+      document.getElementById('d-entrega-check').checked = false;
+      document.getElementById('debt-entrega-wallet').style.display = 'none';
+    }).catch(function(err){ toast('⚠️ ' + err.message); });
   }
 }
 
@@ -1433,7 +1801,7 @@ function processDebtPayment() {
   
   var amount = getRawAmount('dp-amount');
   var wallet = document.getElementById('dp-wallet').value;
-  if(!amount || amount <= 0) { alert('Monto inválido'); return; }
+  if(!amount || amount <= 0 || !wallet) { alert('Monto o cuenta inválidos'); return; }
   
   var txnType = d.type === 'to_pay' ? 'egreso' : 'ingreso';
   var txnId = String(Date.now());
@@ -1446,6 +1814,7 @@ function processDebtPayment() {
       walletId: wallet, destinationWalletId: null,
       categoryId: 'otro', entityId: d.entityId || null,
       status: "completed", origin: "debtPayment", commitmentId: String(d.id),
+      isNeutral: true,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(), createdBy: DEV_USER_ID
   });
   
@@ -1472,9 +1841,13 @@ function renderDebts() {
   
   var activeDebts = state.debts.filter(d => d.status !== 'archived');
   
-  if(!activeDebts.length) { el.innerHTML = '<div class="empty" style="padding:40px 20px"><div style="font-size:32px;margin-bottom:12px">🤝</div><div style="margin-bottom:8px;font-size:14px;color:var(--text1);font-weight:600">Sin deudas activas</div><div style="margin-bottom:20px;font-size:13px">Registra préstamos y deudas con terceros para mantener el control de tus saldos pendientes.</div><button class="btn" style="width:100%" onclick="openDebtCrudModal(null)">+ Registrar Deuda</button></div>'; return; }
+  if(!activeDebts.length) { el.innerHTML = '<div class="empty" style="padding:40px 20px"><div style="font-size:32px;margin-bottom:12px">🤝</div><div style="margin-bottom:8px;font-size:14px;color:var(--text1);font-weight:600">Sin deudas activas</div><div style="margin-bottom:20px;font-size:13px">Registra préstamos y deudas con terceros para mantener el control de tus saldos pendientes.</div><button class="btn" style="width:100%" onclick="openDebtModal(null)">+ Registrar Deuda</button></div>'; return; }
   
-  el.innerHTML = activeDebts.map(d => {
+  var summaryHtml = '<div class="summary-bar" style="margin-bottom:12px">' +
+    '<div class="summary-row"><span>Total que debo</span><span style="color:var(--red)">' + fmt(totalDebtLiabilities()) + '</span></div>' +
+    '<div class="summary-row"><span>Total por cobrar</span><span style="color:var(--green)">' + fmt(totalReceivables()) + '</span></div>' +
+    '</div>';
+  el.innerHTML = summaryHtml + activeDebts.map(d => {
     var endStr = getPeriodEndStr();
     var totalPaid = state.transactions.filter(t => t.origin === 'debtPayment' && String(t.commitmentId) === String(d.id) && t.date <= endStr).reduce((a,t) => a + t.amount, 0);
     var pending = d.initialAmount - totalPaid;
@@ -1488,7 +1861,7 @@ function renderDebts() {
     
     var pct = Math.min(Math.round(totalPaid / d.initialAmount * 100), 100);
     
-    var payBtn = !isPaidOff ? '<button class="btn-outline" style="font-size:11px;padding:5px 10px;border-radius:6px;margin-right:6px" onclick="openDebtPayModal('+d.id+')">Abonar</button>' : '';
+    var payBtn = !isPaidOff ? '<button class="btn-outline" style="font-size:11px;padding:5px 10px;border-radius:6px;margin-right:6px" onclick="openDebtPayModal('+d.id+')">'+(d.type === 'to_receive' ? 'Recibir' : 'Abonar')+'</button>' : '';
     
     return '<div class="goal-card" style="margin-bottom:10px">'+
       '<div style="display:flex;justify-content:space-between;align-items:start">'+
@@ -1647,8 +2020,13 @@ function txnHTML(t,showEdit) {
   var catL = !isTr && !isCc && t.cat ? ' · '+(CAT_LABELS[t.cat]||t.cat) : '';
   if (entName && !isTr && !isCc) catL = ' · ' + entName + catL;
 
-  var editBtn=(showEdit && t.type !== 'cc_payment')?'<button class="icon-btn edit" onclick="openEditModal('+t.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>':'';
-  return '<div class="txn"><div class="txn-icon '+cls+'">'+icon+'</div><div class="txn-info"><div class="txn-desc">'+t.desc+'</div><div class="txn-sub">'+t.date+' '+accB+dstB+catL+'</div></div><div class="txn-amount '+cls+'">'+(isIng?'+':(isTr||isCc)?'↔':'-')+fmt(t.amount)+'</div><div class="txn-actions">'+editBtn+'</div></div>';
+  var originMap = { 'fixedExpense':'Fijo','debtPayment':'Deuda','ccPayment':'Tarjeta','loanDisbursement':'Préstamo','loanLending':'Préstamo','migration':'Migrado','system':'Sistema' };
+  var oBadge = (t.origin && originMap[t.origin]) ? ' <span style="font-size:10px;font-weight:600;color:var(--text3);border:1px solid var(--border);padding:1px 6px;border-radius:8px">'+originMap[t.origin]+'</span>' : '';
+  var neutralNote = t.isNeutral ? ' <span style="font-size:10px;color:var(--text3)">· no cuenta en totales</span>' : '';
+
+  var isManual = (!t.origin || t.origin === 'manual');
+  var editBtn=(showEdit && isManual)?'<button class="icon-btn edit" onclick="openEditModal('+t.id+')" title="Editar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>':'';
+  return '<div class="txn"><div class="txn-icon '+cls+'">'+icon+'</div><div class="txn-info"><div class="txn-desc">'+t.desc+'</div><div class="txn-sub">'+t.date+' '+accB+dstB+catL+oBadge+neutralNote+'</div></div><div class="txn-amount '+cls+'">'+(isIng?'+':(isTr||isCc)?'↔':'-')+fmt(t.amount)+'</div><div class="txn-actions">'+editBtn+'</div></div>';
 }
 
 
@@ -1731,7 +2109,7 @@ function renderHomeAhorro() {
   var el = document.getElementById('widget-ahorro');
   if(!el) return;
   var month = getActivePeriodTransactions();
-  var ing = month.filter(function(t){ return t.type==='ingreso'; }).reduce(function(a,t){ return a+t.amount; }, 0);
+  var ing = month.filter(function(t){ return t.type==='ingreso' && !t.isNeutral; }).reduce(function(a,t){ return a+t.amount; }, 0);
   var totalFijos = (state.fixedExpenses||[]).filter(function(f){ return f.status!=='archived'; }).reduce(function(a,f){ return a+f.amount; }, 0);
   var ahorro = ing - totalFijos;
   var pct = ing > 0 ? Math.max(0, Math.round((ahorro/ing)*100)) : 0;
@@ -1751,18 +2129,65 @@ function renderHomeAhorro() {
   '</div>';
 }
 
+function totalLiquid() {
+  return (state.wallets||[]).filter(function(w){ return w.status !== 'archived'; }).reduce(function(a,w){ return a + (w.balance||0); }, 0);
+}
+
+function debtPending(d) {
+  var paid = (state.transactions||[]).filter(function(t){ return t.origin === 'debtPayment' && String(t.commitmentId) === String(d.id); }).reduce(function(a,t){ return a + (t.amount||0); }, 0);
+  return Math.max(0, (d.initialAmount||0) - paid);
+}
+
+function totalDebtLiabilities() {
+  return (state.debts||[]).filter(function(d){ return d.status !== 'archived' && d.type !== 'to_receive'; }).reduce(function(a,d){ return a + debtPending(d); }, 0);
+}
+
+function totalReceivables() {
+  return (state.debts||[]).filter(function(d){ return d.status !== 'archived' && d.type === 'to_receive'; }).reduce(function(a,d){ return a + debtPending(d); }, 0);
+}
+
+function totalCardDebt() {
+  var sum = 0;
+  (state.instruments||[]).forEach(function(i){
+    var spent = (state.transactions||[]).filter(function(t){ return t.type === 'egreso' && String(t.instrumentId) === String(i.id); }).reduce(function(a,t){ return a + (t.amount||0); }, 0);
+    var paid = (state.transactions||[]).filter(function(t){ return t.type === 'cc_payment' && String(t.instrumentId) === String(i.id); }).reduce(function(a,t){ return a + (t.amount||0); }, 0);
+    sum += Math.max(0, spent - paid);
+  });
+  return sum;
+}
+
+function netWorth() {
+  return totalLiquid() + totalReceivables() - totalDebtLiabilities() - totalCardDebt();
+}
+
+function totalReserved() {
+  return (state.goals||[]).filter(function(g){ return g.status !== 'archived'; }).reduce(function(a,g){ return a + (g.saved||0); }, 0);
+}
+
+function totalDebt() {
+  return totalDebtLiabilities() + totalCardDebt();
+}
+
+function disponibleReal() {
+  return totalLiquid() - totalReserved();
+}
+
 function renderAll() {
   renderOnboardingChecklist();
-  var total=Object.values(state.accounts).reduce(function(a,b){return a+(b||0);},0);
+  var total=disponibleReal();
   var month=getActivePeriodTransactions();
   updatePeriodUI();
-  var ing=month.filter(function(t){return t.type==='ingreso';}).reduce(function(a,t){return a+t.amount;},0);
-  var eg=month.filter(function(t){return t.type==='egreso';}).reduce(function(a,t){return a+t.amount;},0);
+  var ing=month.filter(function(t){return t.type==='ingreso' && !t.isNeutral;}).reduce(function(a,t){return a+t.amount;},0);
+  var eg=month.filter(function(t){return t.type==='egreso' && !t.isNeutral;}).reduce(function(a,t){return a+t.amount;},0);
   var bal=ing-eg;
   
   // Update header
   var headTotal = document.getElementById('header-total');
   if(headTotal) headTotal.textContent=fmt(total);
+  var nwEl = document.getElementById('networth-line');
+  if(nwEl) { var nw = netWorth(); nwEl.textContent = 'Patrimonio neto: ' + fmt(nw); nwEl.style.color = nw >= 0 ? 'var(--green)' : 'var(--red)'; }
+  var bdEl = document.getElementById('liquid-breakdown');
+  if(bdEl) bdEl.textContent = 'Líquido ' + fmt(totalLiquid()) + ' · Reservado ' + fmt(totalReserved()) + ' · Por cobrar ' + fmt(totalReceivables()) + ' · Deudas ' + fmt(totalDebt());
   
   var mIng = document.getElementById('m-ing');
   if(mIng) mIng.textContent=fmt(ing);
@@ -1776,7 +2201,7 @@ function renderAll() {
   // Phase 9 logic
   var prevTxns = getPreviousPeriodTransactions();
   var pIng = prevTxns.filter(t => t.type === 'ingreso').reduce((a,t)=>a+t.amount,0);
-  var pEg = prevTxns.filter(t => t.type === 'egreso').reduce((a,t)=>a+t.amount,0);
+  var pEg = prevTxns.filter(t => t.type === 'egreso' && !t.isNeutral).reduce((a,t)=>a+t.amount,0);
   
   // Health badge
   var hBadge = document.getElementById('health-badge');
@@ -1835,11 +2260,11 @@ function renderAll() {
   }
 
   // Calculate Cat Bars
-  var egs=month.filter(function(t){return t.type==='egreso';});
+  var egs=getAnalysisTransactions().filter(function(t){return t.type==='egreso' && !t.isNeutral;});
   var catEl=document.getElementById('cat-bars');
   var catArr = [];
   if(catEl) {
-    if(!egs.length){catEl.innerHTML = state.transactions.length === 0 ? '<div class="empty">Cuando registres gastos, aquí verás su distribución.</div>' : '<div class="empty">Sin egresos este mes</div>';}
+    if(!egs.length){catEl.innerHTML = state.transactions.length === 0 ? '<div class="empty">Cuando registres gastos, aquí verás su distribución.</div>' : '<div class="empty">Sin egresos en este rango</div>';}
     else {
       var catSums={};
       egs.forEach(function(t){
@@ -1874,6 +2299,19 @@ function renderAll() {
       var pctTop = Math.round((top.val / eg) * 100);
       insights.push(top.icon + ' <strong>' + top.name + '</strong> representa el <strong>' + pctTop + '%</strong> de tus salidas de dinero.');
   }
+  var weekSpend = getWeekSpend(0);
+  var prevWeekSpend = getWeekSpend(1);
+  if (weekSpend > 0 || prevWeekSpend > 0) {
+      if (prevWeekSpend > 0) {
+          var wDiff = weekSpend - prevWeekSpend;
+          var wPct = Math.abs(Math.round((wDiff / prevWeekSpend) * 100));
+          if (wDiff > 0) insights.push('📅 Esta semana has gastado <strong>' + fmt(weekSpend) + '</strong>, un <strong>' + wPct + '% más</strong> que la anterior.');
+          else if (wDiff < 0) insights.push('📅 Esta semana has gastado <strong>' + fmt(weekSpend) + '</strong>, un <strong>' + wPct + '% menos</strong> que la anterior.');
+          else insights.push('📅 Esta semana has gastado <strong>' + fmt(weekSpend) + '</strong>, igual que la anterior.');
+      } else {
+          insights.push('📅 Esta semana has gastado <strong>' + fmt(weekSpend) + '</strong>.');
+      }
+  }
   if (insights.length === 0) {
       insights.push('Aún no hay suficientes datos para generar observaciones en este período.');
   }
@@ -1889,7 +2327,7 @@ function renderAll() {
      if(state.wallets.length === 0) {
         rl.innerHTML = '<div class="empty">Crea una cuenta primero para añadir movimientos.</div>';
      } else if(state.transactions.length === 0) {
-        rl.innerHTML = '<div class="empty" style="padding:24px 0"><div style="font-size:24px;margin-bottom:8px">📝</div><div style="margin-bottom:12px;font-size:13px;color:var(--text1)">Registra tu primer movimiento</div><button class="btn" onclick="document.getElementById(\'nav-nuevo\').click(); setType(\'egreso\');">Comenzar</button></div>';
+        rl.innerHTML = '<div class="empty" style="padding:24px 0"><div style="font-size:24px;margin-bottom:8px">📝</div><div style="margin-bottom:12px;font-size:13px;color:var(--text1)">Registra tu primer movimiento</div><button class="btn" onclick="showTab(\'nuevo\'); setType(\'egreso\');">Comenzar</button></div>';
      } else {
         rl.innerHTML = state.transactions.slice(0,5).map(function(t){return txnHTML(t,true);}).join('');
      }
@@ -1922,14 +2360,14 @@ function renderGoals() {
   el.innerHTML=state.goals.map(function(g){
     var saved = g.saved; // Should this be computed dynamically? Assuming yes for v2, but for now we leave it since goals haven't been migrated yet to dynamic txns in our context. Or actually, the prompt says "metas acumuladas" depend on period active. But there are no transactions with origin="goal" yet. Let's leave g.saved for now.
     var pct=Math.min(Math.round(saved/g.target*100),100),done=pct>=100;
-    return '<div class="goal-card"><div style="display:flex;justify-content:space-between;align-items:start"><div><div class="goal-name">'+(done?'✓ ':'')+g.name+'</div><div class="goal-sub">'+(done?'¡Meta alcanzada!':'Faltan '+fmt(g.target-g.saved))+'</div></div><button class="icon-btn del" onclick="deleteGoal('+g.id+')" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button></div><div class="goal-bar-bg"><div class="goal-bar-fill" style="width:'+pct+'%;background:'+(done?'var(--green)':'var(--blue)')+'"></div></div><div class="goal-footer"><span>Ahorrado: <strong>'+fmt(g.saved)+'</strong></span><strong>'+pct+'%</strong><span>Meta: <strong>'+fmt(g.target)+'</strong></span></div>'+(done?'':'<div style="margin-top:10px"><button class="btn-outline" style="width:100%;font-size:13px" onclick="addToGoal('+g.id+')">+ Abonar a esta meta</button></div>')+'</div>';
+    return '<div class="goal-card"><div style="display:flex;justify-content:space-between;align-items:start"><div><div class="goal-name">'+(done?'✓ ':'')+g.name+'</div><div class="goal-sub">'+(done?'¡Meta alcanzada!':'Faltan '+fmt(g.target-g.saved))+'</div></div><button class="icon-btn del" onclick="deleteGoal('+g.id+')" title="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg></button></div><div class="goal-bar-bg"><div class="goal-bar-fill" style="width:'+pct+'%;background:'+(done?'var(--green)':'var(--blue)')+'"></div></div><div class="goal-footer"><span>Ahorrado: <strong>'+fmt(g.saved)+'</strong></span><strong>'+pct+'%</strong><span>Meta: <strong>'+fmt(g.target)+'</strong></span></div>'+(done?'':'<div style="margin-top:10px"><button class="btn-outline" style="width:100%;font-size:13px" onclick="openGoalPayModal('+g.id+')">+ Abonar a esta meta</button></div>')+'</div>';
   }).join('');
 }
 
 function renderFijos() {
   var fijos=state.fixedExpenses||[];
   var month=getActivePeriodTransactions();
-  var ing=month.filter(function(t){return t.type==='ingreso';}).reduce(function(a,t){return a+t.amount;},0);
+  var ing=month.filter(function(t){return t.type==='ingreso' && !t.isNeutral;}).reduce(function(a,t){return a+t.amount;},0);
   
   var totalFijos=0;
   var totalPagado=0;
@@ -2004,4 +2442,5 @@ function renderFijos() {
   }).join('');
 }
 
-window.addEventListener('load', function(){ init(); });
+  // El arranque ahora lo controla auth.onAuthStateChanged.
+    // init() se llama automáticamente cuando hay sesión activa.
