@@ -638,6 +638,14 @@ function startListeners() {
     if(snap.exists) {
       workspaceSettings = snap.data().settings || {};
       document.title = (snap.data().name || 'MoneyFlow') + ' · MoneyFlow';
+      var wsNameEl = document.getElementById('ws-name');
+      if (wsNameEl) wsNameEl.textContent = snap.data().name || 'MoneyFlow';
+      var subEl = document.getElementById('app-name-sub');
+      if (subEl) {
+        var uname = '';
+        if (CURRENT_USER) uname = CURRENT_USER.displayName || (CURRENT_USER.email ? CURRENT_USER.email.split('@')[0] : '');
+        subEl.textContent = uname;
+      }
       var savedConfig = snap.data().homeConfig || {};
       Object.keys(homeConfig).forEach(function(k) {
         if(savedConfig[k] !== undefined) homeConfig[k] = savedConfig[k];
