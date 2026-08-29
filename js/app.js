@@ -12,6 +12,10 @@ if (!firebase.apps.length) {
 var db = firebase.firestore();
 var auth = firebase.auth();
 
+// Clave VAPID para notificaciones push (Firebase → Project settings → Cloud Messaging → Web Push certificate).
+// Pégala aquí para activar push reales; mientras esté vacía, la app no intenta registrar FCM.
+var FCM_VAPID_KEY = '';
+
 // ============================================================
 //  AUTENTICACIÓN E IDENTIDAD — Bloque 1A
 //  Reemplaza las líneas:
@@ -175,10 +179,23 @@ function notify(title, body) {
 
 function requestNotifications() {
   if (!('Notification' in window)) { toast('Este navegador no soporta notificaciones'); return; }
-  if (Notification.permission === 'granted') { toast('✅ Notificaciones ya activadas'); return; }
+  if (Notification.permission === 'granted') { toast('✅ Notificaciones ya activadas'); initMessaging(); return; }
   Notification.requestPermission().then(function(p){
     toast(p === 'granted' ? '✅ Notificaciones activadas' : 'Notificaciones no permitidas');
+    if (p === 'granted') initMessaging();
   });
+}
+
+function initMessaging() {
+  if (!FCM_VAPID_KEY || !window.firebase || !firebase.messaging) return;
+  try {
+    var messaging = firebase.messaging();
+    messaging.getToken({ vapidKey: FCM_VAPID_KEY }).then(function(token){
+      if (token && CURRENT_USER) {
+        db.collection("users").doc(CURRENT_USER.uid).set({ fcmToken: token }, { merge: true }).catch(function(){});
+      }
+    }).catch(function(){});
+  } catch(e) {}
 }
 
 var ACC_LABELS = {milo:'Cuenta Milo',sari:'Cuenta Sari',cash:'Caja fuerte'};
