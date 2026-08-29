@@ -14,7 +14,7 @@ var auth = firebase.auth();
 
 // Clave VAPID para notificaciones push (Firebase → Project settings → Cloud Messaging → Web Push certificate).
 // Pégala aquí para activar push reales; mientras esté vacía, la app no intenta registrar FCM.
-var FCM_VAPID_KEY = '';
+var FCM_VAPID_KEY = 'BOKGHa5Bh_eQ7NCoBs4k1WFdwz_ZBlg9NwThsYXBSjCBuWDbqWLu5jlJmZb5Zq_oPMZUzwYtQ87au7PVAGk3qnA';
 
 // ============================================================
 //  AUTENTICACIÓN E IDENTIDAD — Bloque 1A
