@@ -83,7 +83,13 @@ function wireAuthButtons() {
     try {
       const provider = new firebase.auth.GoogleAuthProvider();
       await auth.signInWithPopup(provider);
-    } catch (e) { showErr('No se pudo entrar con Google. Intenta de nuevo.'); }
+    } catch (e) {
+      var code = (e && e.code) ? e.code : '';
+      if (code === 'auth/unauthorized-domain') showErr('Dominio no autorizado en Firebase. Agrega este dominio (ej. tu-app.vercel.app) en Firebase → Authentication → Authorized domains.');
+      else if (code === 'auth/popup-blocked') showErr('El navegador bloqueó la ventana de Google. Permite ventanas emergentes para este sitio.');
+      else if (code === 'auth/operation-not-supported-in-this-environment') showErr('Entorno no soportado. Abre con http:// (no file://).');
+      else showErr('No se pudo entrar con Google. Código: ' + code);
+    }
   };
 
   document.getElementById('btn-login').onclick = async () => {
