@@ -1,6 +1,6 @@
 // ⚠️ IMPORTANTE: sube este número (v3, v4...) en CADA deploy para forzar
 // que los usuarios reciban la versión nueva (sin recarga forzada).
-var CACHE = 'moneyflow-v2';
+var CACHE = 'moneyflow-v3';
 var ASSETS = ['./', './index.html', './css/styles.css', './js/app.js'];
 
 self.addEventListener('install', function(e){
