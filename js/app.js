@@ -10,9 +10,6 @@ if (!firebase.apps.length) {
     firebase.initializeApp(firebaseConfig);
 }
 var db = firebase.firestore();
-// Auto-detect long polling: corrige el bloqueo de Firestore en algunas redes WiFi
-// (que bloquean WebSocket y dejan la app "cargando" infinitamente).
-db.settings({ experimentalAutoDetectLongPolling: true });
 var auth = firebase.auth();
 
 // Clave VAPID para notificaciones push (Firebase → Project settings → Cloud Messaging → Web Push certificate).
@@ -131,14 +128,30 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-// Watchdog: si en 12s la app no arranca, avisa en vez de quedarse cargando infinito.
+// Watchdog: si en 12s la app no arranca, muestra un botón para limpiar y recargar.
 setTimeout(function(){
   var l = document.getElementById('loading');
   if (l && !l.classList.contains('hidden')) {
     var m = document.getElementById('loading-msg');
-    if (m) m.textContent = 'Tarda en conectar… revisa tu conexión o recarga la página.';
+    if (m) m.innerHTML = 'No se pudo conectar.<br><button class="btn-outline" style="margin-top:12px;font-size:13px" onclick="hardReset()">Limpiar y recargar</button>';
   }
 }, 12000);
+
+function hardReset() {
+  try {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(regs){
+        regs.forEach(function(r){ r.unregister(); });
+        if (window.caches && caches.keys) {
+          caches.keys().then(function(keys){ keys.forEach(function(k){ caches.delete(k); }); });
+        }
+        setTimeout(function(){ location.reload(); }, 400);
+      });
+    } else {
+      location.reload();
+    }
+  } catch(e) { location.reload(); }
+}
 
 // --- Cerrar sesión (para usar en un botón dentro de la app) ---
 function cerrarSesion() { auth.signOut(); }
@@ -568,10 +581,15 @@ function saveHomeWidget(key, val) {
 
 // ── MIGRACIÓN A V1 ──
 async function migrateToV1() {
-  const oldDocRef = db.collection("familia").doc("estado");
-  const oldSnap = await oldDocRef.get();
+  var oldSnap;
+  try {
+    oldSnap = await db.collection("familia").doc("estado").get();
+  } catch (err) {
+    console.warn('Migración V1 omitida (familia/estado inaccesible):', err && err.message);
+    return true;
+  }
   if (!oldSnap.exists) return true;
-  const oldData = oldSnap.data();
+  var oldData = oldSnap.data();
   if (oldData.migrated_to_v1) return true;
   
   console.log("Iniciando migración a V1...");
@@ -647,16 +665,22 @@ async function migrateToV1() {
 
 // ── FIREBASE INIT ──
 async function init() {
-  var fml = document.getElementById('fijos-month-label');
-  if (fml) fml.textContent = MONTHS[new Date().getMonth()]+' '+new Date().getFullYear();
-  setDate();
-  wireAutoCategorize();
+  try {
+    var fml = document.getElementById('fijos-month-label');
+    if (fml) fml.textContent = MONTHS[new Date().getMonth()]+' '+new Date().getFullYear();
+    setDate();
+    wireAutoCategorize();
 
-  const migrationSuccess = await migrateToV1();
-  if (migrationSuccess) {
-    document.getElementById('loading').classList.add('hidden');
-    startListeners();
-    syncStatus('ok');
+    var migrationSuccess = await migrateToV1();
+    if (migrationSuccess) {
+      startListeners();
+      syncStatus('ok');
+    }
+  } catch (e) {
+    console.error('Error al iniciar:', e);
+  } finally {
+    var loadingEl = document.getElementById('loading');
+    if (loadingEl) loadingEl.classList.add('hidden');
   }
 }
 
