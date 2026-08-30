@@ -1,6 +1,6 @@
 // ⚠️ IMPORTANTE: sube este número (v3, v4...) en CADA deploy para forzar
 // que los usuarios reciban la versión nueva (sin recarga forzada).
-var CACHE = 'moneyflow-v3';
+var CACHE = 'moneyflow-v4';
 var ASSETS = ['./', './index.html', './css/styles.css', './js/app.js'];
 
 self.addEventListener('install', function(e){
@@ -17,13 +17,12 @@ self.addEventListener('fetch', function(e){
   var url = new URL(e.request.url);
   if (url.origin !== location.origin || e.request.method !== 'GET') return;
   e.respondWith(
-    caches.match(e.request).then(function(cached){
-      var fetched = fetch(e.request).then(function(resp){
-        var copy = resp.clone();
-        caches.open(CACHE).then(function(c){ c.put(e.request, copy); });
-        return resp;
-      }).catch(function(){ return cached; });
-      return cached || fetched;
+    fetch(e.request).then(function(resp){
+      var copy = resp.clone();
+      caches.open(CACHE).then(function(c){ c.put(e.request, copy); });
+      return resp;
+    }).catch(function(){
+      return caches.match(e.request);
     })
   );
 });

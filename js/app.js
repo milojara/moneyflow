@@ -128,6 +128,15 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// Watchdog: si en 12s la app no arranca, avisa en vez de quedarse cargando infinito.
+setTimeout(function(){
+  var l = document.getElementById('loading');
+  if (l && !l.classList.contains('hidden')) {
+    var m = document.getElementById('loading-msg');
+    if (m) m.textContent = 'Tarda en conectar… revisa tu conexión o recarga la página.';
+  }
+}, 12000);
+
 // --- Cerrar sesión (para usar en un botón dentro de la app) ---
 function cerrarSesion() { auth.signOut(); }
 
