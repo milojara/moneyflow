@@ -10,6 +10,9 @@ if (!firebase.apps.length) {
     firebase.initializeApp(firebaseConfig);
 }
 var db = firebase.firestore();
+// Auto-detect long polling: corrige el bloqueo de Firestore en algunas redes WiFi
+// (que bloquean WebSocket y dejan la app "cargando" infinitamente).
+db.settings({ experimentalAutoDetectLongPolling: true });
 var auth = firebase.auth();
 
 // Clave VAPID para notificaciones push (Firebase → Project settings → Cloud Messaging → Web Push certificate).
